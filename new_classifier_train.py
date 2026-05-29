@@ -2,38 +2,27 @@ import os # must import before torch to have desired effect
 os.environ['CUDA_VISIBLE_DEVICES'] ='0'
 
 
-from datasets import load_dataset, DatasetDict, Dataset
+from datasets import load_dataset
+from datasets import load_dataset
 
-from transformers import (
-    AutoTokenizer,
-    AutoConfig, 
-    AutoModelForSequenceClassification,
-    DataCollatorWithPadding,
-    TrainingArguments,
-    Trainer,
-    EarlyStoppingCallback,
-    BitsAndBytesConfig)
+from transformers import AutoTokenizer, AutoModel
 
-from peft import PeftModel, PeftConfig, get_peft_model, LoraConfig
 import evaluate
 import torch
 import numpy as np
-from trl import SFTTrainer
 import pandas as pd
-from custom_code import DatasetPrepper, calculate_class_weights
 import time
 import sklearn
-import shutil
+#import shutil
+#import shutil
 from argparse import ArgumentParser
-import optuna 
-import itertools
-from sklearn.utils.class_weight import compute_class_weight
+#import optuna 
+#import optuna 
 from collections import defaultdict
 import matplotlib.pyplot as plt
 import matplotlib
 from sklearn.model_selection import train_test_split
 import re 
-from functools import partial
 import json 
 import time
 from collections import Counter
@@ -41,19 +30,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 
-from transformers import AutoModel
-from typing import Any, Dict, List, Sequence, Optional
+from typing import Any, Dict, List
 from torch.optim import AdamW
 import math
 from torch.utils.data import DataLoader, DistributedSampler, WeightedRandomSampler
 import random
 import logging 
 
+
 parser = ArgumentParser()
 parser.add_argument("--train", action="store_true", help="Whether to run training.")
+parser.add_argument("--train_data_name", type=str, default="EXIST", help="Name of the training dataset. Options: EXIST")
+parser.add_argument("--train_data_path", type=str, default="../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json", help="Path to the training dataset.")
+parser.add_argument("--val_data_path", type=str, default="../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json", help="Path to the validation dataset.")
+parser.add_argument("--model", type=str, default="NLP-LTU/bertweet-large-sexism-detector", help="Model reference for the Hugging Face model to use. Options: FacebookAI/xlm-roberta-large, microsoft/mdeberta-v3-base, annahaz/xlm-roberta-base-misogyny-sexism-indomain-mix-bal, MilaNLProc/njh-classifier, NLP-LTU/bertweet-large-sexism-detector, cardiffnlp/twitter-roberta-base-hate-latest")
 args = parser.parse_args()
 
-torch.cuda.empty_cache()
 
 # Logger for report
 #rep_logger = logging.getLogger("report_logger")
@@ -61,25 +53,6 @@ torch.cuda.empty_cache()
 
 # Logger for debugging
 #logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s', filename='analysis.log', filemode='w')
-
-'''
-def compute_class_weights(labels, num_classes=6):
-    """
-    Calculate class weights for imbalanced datasets for a multilabel task.
-    """
-    print(f"Number of labels: {num_classes}")
-    classes = range(num_classes) # for 6 classes in multilabel classification
-    N = len(labels)
-    class_weights: List[float] = [0.0 for _ in classes]
-
-    for i, id in enumerate(classes):
-        class_weights[i] = N / np.sum([1 for label in labels if label[id] == 1])
-        class_weights[id] = np.float32(class_weights[id]) # convert to float32 for compatibility with model training
-
-    print(f"Calculated class weights: {class_weights}")
-    return class_weights
-    '''
-
 
 def set_seed(seed):
     torch.manual_seed(seed)  # Sets seed for CPU operations
@@ -91,9 +64,6 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
     torch.backends.cudnn.deterministic = True  # Ensures deterministic behavior
     torch.backends.cudnn.benchmark = False     # Disables non-deterministic optimizations
-
-# Example usage
-set_seed(42)
 
 def compute_class_weights(labels, num_classes=6):
     N = len(labels)
@@ -109,74 +79,128 @@ def compute_class_weights(labels, num_classes=6):
     print(f"Calculated class weights: {class_weights}")
     return class_weights
 
-
 def flatten(xss):
     return [x for xs in xss for x in xs]
 
-def final_labels(x: dict, level, label2id_dict):
-    labels = [0 for _ in range(len(label2id_dict[f"level_{level}"]))]
-    non_gbv = "NO" if level == 1 else "-"
-    if x[non_gbv] == 3:
-        return 99
-    elif x[non_gbv] > 3:
-        labels[0] = 1
-        return labels
-    else:
-        if level == 1:
-            labels[1] = 1
-            return labels
-        elif level == 3:
-            for k, v in x.items():
-                if k in label2id_dict[f"level_{level}"]:
-                    if v >= 2:
-                        labels[label2id_dict[f"level_{level}"][k]] = 1
-            labels[0] = 0 # ensure that the non-gbv label is set to 0 if any gbv label is present
-    if sum(labels) == 0:
-        return 99
-    return labels
+# ----------------------------------
+# Data loading and processing
+# ----------------------------------
 
+def clean_text(tweet):
+    """Remove Twitter handles from text."""
+    assert isinstance(tweet, str), f"Expected a string, but got {type(tweet)}, with value: {tweet}"
+    result = re.sub(r'(RT\s@[A-Za-z]+[A-Za-z0-9-_]+)', '', tweet)
+    result = re.sub(r'(@[A-Za-z0-9-_]+)', '', result)
+    result = re.sub(r'https?\S+', '', result)
+    result = re.sub(r'bit.ly/\S+', '', result) 
+    result = re.sub(r'&[\S]+?;', '', result)
+    #result = re.sub(r'<MENTION_[1-9]>', '', result)  # for AMI dataset 
+    #result = re.sub(r'<URL>', '', result)  # for AMI dataset
+    #result = re.sub(r'#', ' ', result)
+    return result
 
-def handle_labels(dataset, level: list, label2id_dict):
-    label_list = []
+def create_data_loader(processed_data, tokenizer, batch_size=16):
+    encodings = tokenizer(
+        processed_data["text"].tolist(),
+        truncation=True,
+        padding=True,
+        max_length=128,
+        return_tensors="pt",
+    )
+    binary_labels = torch.tensor(processed_data["binary_labels"].tolist())
+    category_labels = torch.tensor(processed_data["category_labels"].tolist())
+    comment_id = torch.tensor(processed_data["id_EXIST"].tolist())
+    dataset = torch.utils.data.TensorDataset(
+        encodings["input_ids"],
+        encodings["attention_mask"],
+        binary_labels.to(torch.float),
+        category_labels.to(torch.float),
+        comment_id,
+    )
+    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)    
 
-    for l in level:
-        col = f"labels_task1_{l}"
-        print(f"Processing level {col} for EXIST")
-        dataset = dataset.dropna(subset=[col]) # drop rows with missing labels for this level
-        dataset[f"labels_{l}"] = dataset[col].apply(lambda x: Counter(x) if isinstance(x[0], str) else Counter(flatten(x)))
-        label_list.append(f"labels_{l}")
-        dataset[f"labels_{l}"] = dataset[f"labels_{l}"].apply(lambda x: final_labels(x, level=l, label2id_dict=label2id_dict))
-
-    return dataset[["tweet"] + label_list]
+def set_multilingual(model_ref):
+    if model_ref in ["FacebookAI/xlm-roberta-large", "microsoft/mdeberta-v3-base", "annahaz/xlm-roberta-base-misogyny-sexism-indomain-mix-bal", "NLP-LTU/bertweet-large-sexism-detector"]:
+        return True
+    return False
 
 class DataLoader:
-    def __init__(self, file_path, split, label2id_dict, multilingual=False):
+    def __init__(self, data_name, data_path, split, label2id_dict, multilingual=False):
+        self.data_name = data_name
+        if data_path is None:
+            if data_name == "EXIST":
+                if split == "train":
+                    self.data_path = "../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json"
+                elif split == "dev":
+                    self.data_path = "../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json"
+        else:
+            self.data_path = data_path
         self.split = split
-        self.file_path = file_path
-        self.train_data_name = "EXIST"
         self.label2id_dict = label2id_dict
         self.multilingual = multilingual
 
-        self.raw_data = self.load_data()
-        self.processed_data = self.preprocess_data(self.raw_data, [1,3], label2id_dict)
-        self.processed_data = self.processed_data.rename(columns={"tweet": "text", "labels_1": "binary_labels", "labels_3": "category_labels"})
-        self.processed_data["id_EXIST"] = self.processed_data.index # add a column for the original comment ID from the EXIST dataset for easier analysis later
-
-    def load_data(self):
+    def load_raw_data(self):
         if self.split == "train":
-            raw_data = pd.read_json(self.file_path,orient='index')
+            raw_data = pd.read_json(self.data_path,orient='index')
             if self.multilingual:
                 dataset = raw_data[(raw_data["split"] == "TRAIN_EN") | (raw_data["split"] == "TRAIN_ES")]
             else:
                 dataset = raw_data[raw_data["split"] == "TRAIN_EN"]
         elif self.split == "dev":
-            raw_data = pd.read_json(self.file_path,orient='index')
+            raw_data = pd.read_json(self.data_path,orient='index')
             dataset = raw_data[raw_data["split"] == "DEV_EN"]
         return dataset
 
-    def preprocess_data(self, raw_data, level, label2id_dict):
-        return handle_labels(raw_data, level=level, label2id_dict=label2id_dict)
+    def load_processed_data(self, level_list, clean=False):
+        self.level_list = level_list 
+        raw_data = self.load_raw_data()
+        processed_data = self.handle_labels(raw_data)
+        assert "labels_1" in processed_data.columns and "labels_3" in processed_data.columns, f"Expected columns 'labels_1' and 'labels_3' in processed data, but got {processed_data.columns}"
+        processed_data.rename(columns={"tweet": "text", "labels_1": "binary_labels", "labels_3": "category_labels"}, inplace=True)
+        processed_data["id_EXIST"] = processed_data.index
+        if clean:
+            processed_data["text"] = processed_data["text"].apply(clean_text)
+        return processed_data
 
+    def final_labels(self,x: dict, level):
+        labels = [0 for _ in range(len(self.label2id_dict[f"level_{level}"]))]
+        non_gbv = "NO" if level == 1 else "-"
+        if x[non_gbv] == 3:
+            return 99
+        elif x[non_gbv] > 3:
+            labels[0] = 1
+            return labels
+        else:
+            if level == 1:
+                labels[1] = 1
+                return labels
+            elif level == 3:
+                for k, v in x.items():
+                    if k in self.label2id_dict[f"level_{level}"]:
+                        if v >= 2:
+                            labels[self.label2id_dict[f"level_{level}"][k]] = 1
+                labels[0] = 0 # ensure that the non-gbv label is set to 0 if any gbv label is present
+        if sum(labels) == 0:
+            return 99
+        return labels
+
+
+    def handle_labels(self, dataset):
+        label_list = []
+        for level in self.level_list:
+            col = f"labels_task1_{level}"
+            print(f"Processing level {col} for EXIST")
+            dataset = dataset.dropna(subset=[col]) # drop rows with missing labels for this level
+            dataset[f"labels_{level}"] = dataset[col].apply(lambda x: Counter(x) if isinstance(x[0], str) else Counter(flatten(x)))
+            label_list.append(f"labels_{level}")
+            dataset[f"labels_{level}"] = dataset[f"labels_{level}"].apply(lambda x: self.final_labels(x, level))
+
+        return dataset[["tweet"] + label_list]
+
+
+# ----------------------------------
+# Define model 
+# ----------------------------------
 
 class AppearanceMultiTaskClassifier(nn.Module):
     def __init__(
@@ -265,12 +289,6 @@ class AppearanceMultiTaskClassifier(nn.Module):
 
         if binary_labels is not None and category_labels is not None:
             binary_loss = self._binary_loss(binary_logits, binary_labels, binary_class_weights)
-            #category_loss = F.cross_entropy(
-            #    category_logits,
-            #    category_labels,
-            #    weight=category_class_weights,
-            #    reduction="none",
-            #)
             category_loss = self._category_loss(category_logits, category_labels, category_class_weights)
  
 
@@ -283,25 +301,11 @@ class AppearanceMultiTaskClassifier(nn.Module):
 
         return outputs
 
-def create_data_loader(processed_data, tokenizer, batch_size=16):
-    encodings = tokenizer(
-        processed_data["text"].tolist(),
-        truncation=True,
-        padding=True,
-        max_length=128,
-        return_tensors="pt",
-    )
-    binary_labels = torch.tensor(processed_data["binary_labels"].tolist())
-    category_labels = torch.tensor(processed_data["category_labels"].tolist())
-    comment_id = torch.tensor(processed_data["id_EXIST"].tolist())
-    dataset = torch.utils.data.TensorDataset(
-        encodings["input_ids"],
-        encodings["attention_mask"],
-        binary_labels.to(torch.float),
-        category_labels.to(torch.float),
-        comment_id,
-    )
-    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)    
+
+
+# ----------------------------------
+# Define training loop  
+# ----------------------------------
 
 
 def move_batch_to_device(batch, device: "cuda") -> Dict[str, Any]:
@@ -413,7 +417,7 @@ class EarlyStopping:
 
         return self.should_stop
 
-def train(model, train_dataset, val_dataset, label2id_dict, model_save_path=None, model_ref="microsoft/mdeberta-v3-base"):
+def train(model, train_dataset, val_dataset, label2id_dict, best_save_path=None, model_ref="microsoft/mdeberta-v3-base"):
     device = "cuda"
 
     print("No checkpoint found, starting from scratch.")
@@ -470,25 +474,33 @@ def train(model, train_dataset, val_dataset, label2id_dict, model_save_path=None
 
             if step % 20 == 0:
                 validation = evaluate_model(model, val_loader, "cuda")
-                val_loss = validation["loss"]
+                val_loss = validation['loss']
+                #print(f"Step {step}: Training Loss: {loss.item():.4f}, Validation Loss: {validation['loss']:.4f}, binary loss: {validation['loss_binary']:.4f}, category loss: {validation['loss_category']:.4f}")
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
-                    if model_save_path is not None:
-                        torch.save(model.state_dict(), model_save_path)
+                    if best_save_path is not None:
+                        torch.save(model.state_dict(), best_save_path)
                         print(f"New best model saved at step {step} with validation loss {val_loss:.4f}")
 
                 if early_stopping.step(val_loss, global_step):
                     print(f"Early stopping triggered at global step {step} with validation loss {val_loss:.4f}. Best validation loss was {best_val_loss:.4f} at step {early_stopping.best_step}.")
-                    model.load_state_dict(torch.load(model_save_path))
                     break
-
-                #print(f"Step {step}: Training Loss: {loss.item():.4f}, Validation Loss: {validation['loss']:.4f}, binary loss: {validation['loss_binary']:.4f}, category loss: {validation['loss_category']:.4f}")
 
         validation = evaluate_model(model, val_loader, "cuda")
         print(f"Validation loss for epoch {epoch}: {validation['loss']:.4f}, binary loss: {validation['loss_binary']:.4f}, category loss: {validation['loss_category']:.4f}")
 
-    torch.save(model.state_dict(), model_save_path)
+    # load best model at end 
+    print("Loading best model from checkpoint for final evaluation.")
+    model.load_state_dict(torch.load(best_save_path))
+    #torch.save(model.state_dict(), model_save_path)
+    return model 
+
+
+
+# ----------------------------------
+# Define evaluation and saving functions 
+# ----------------------------------
 
 
 def get_f1_score(records):
@@ -502,49 +514,40 @@ def get_f1_score(records):
     f1_score["category"] = sklearn.metrics.f1_score(y_true_category, y_pred_category, average=None)
     return f1_score
 
-def clean_text(tweet):
-    """Remove Twitter handles from text."""
-    assert isinstance(tweet, str), f"Expected a string, but got {type(tweet)}, with value: {tweet}"
-    result = re.sub(r'(RT\s@[A-Za-z]+[A-Za-z0-9-_]+)', '', tweet)
-    result = re.sub(r'(@[A-Za-z0-9-_]+)', '', result)
-    result = re.sub(r'https?\S+', '', result)
-    result = re.sub(r'bit.ly/\S+', '', result) 
-    result = re.sub(r'&[\S]+?;', '', result)
-    #result = re.sub(r'<MENTION_[1-9]>', '', result)  # for AMI dataset 
-    #result = re.sub(r'<URL>', '', result)  # for AMI dataset
-    #result = re.sub(r'#', ' ', result)
-    return result
 
-
-def evaluate_and_save(model, model_path, dataset, device, model_ref="microsoft/mdeberta-v3-base"):
-    model.load_state_dict(torch.load(model_path))
+def evaluate_and_save(model, load_pt_flag=True, pt_path=None, model_save_path=None, dataset=None, device="cuda", model_ref="microsoft/mdeberta-v3-base"):
+    if load_pt_flag == False:
+        model = model
+    else:
+        model.load_state_dict(torch.load(pt_path))
     model.to(device)
     loader = create_data_loader(dataset, AutoTokenizer.from_pretrained(model_ref), batch_size=16)
     evaluation = evaluate_model(model, loader, device)
     print(f"Evaluation results: Loss: {evaluation['loss']:.4f}, Binary Loss: {evaluation['loss_binary']:.4f}, Category Loss: {evaluation['loss_category']:.4f}")
     f1_score = get_f1_score(evaluation["records"])
     print(f"Binary F1 Score: {f1_score['binary']:.4f}, Category F1 Score: {f1_score['category']}")
+    if model_save_path is not None:
+        torch.save(model.state_dict(), model_save_path)
+        print(f"Model state dict saved at {model_save_path}")
 
-def main(label2id_dict, do_train):
-    #model_ref = "FacebookAI/xlm-roberta-large"
-    #model_ref = "microsoft/mdeberta-v3-base"
-    #model_ref = 'annahaz/xlm-roberta-base-misogyny-sexism-indomain-mix-bal'
-    #model_ref = "MilaNLProc/njh-classifier"
-    model_ref = "NLP-LTU/bertweet-large-sexism-detector"
-    #model_ref = "cardiffnlp/twitter-roberta-base-hate-latest"
+# ----------------------------------
+# Define main function
+# ----------------------------------
 
-    multilingual = True if "xlm" in model_ref else True if "mdeberta" in model_ref else False
+def main(label2id_dict, train_flag=False, train_data_name = None, train_data_path=None, model_ref="NLP-LTU/bertweet-large-sexism-detector"):
     print(f"Using model reference: {model_ref}")
 
-    # Load the train dataset
-    train_data = DataLoader("./data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json", split="train", label2id_dict=label2id_dict, multilingual=True).processed_data
-    train_data["text"] = train_data["text"].apply(clean_text) # clean the text by removing Twitter handles and URLs for better model performance
-    print(train_data.head())
+    set_seed(42)
 
+    multilingual = set_multilingual(model_ref)
+
+    # Load the train dataset
+    train_data = DataLoader(data_name=train_data_name, data_path = train_data_path, label2id_dict=label2id_dict, split="train", multilingual=multilingual).load_processed_data([1, 3], clean=True)
+    print(train_data.head())
     #print(train_data["binary_labels"].value_counts())
     #print(train_data["category_labels"].value_counts())
 
-    test_data = DataLoader("./data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json", split="dev", label2id_dict=label2id_dict, multilingual=True).processed_data
+    test_data = DataLoader(data_name = train_data_name, data_path = None,  split="dev", label2id_dict=label2id_dict, multilingual=True).load_processed_data([1, 3], clean=False)
     #print(test_data.head())
     #print(test_data["binary_labels"].value_counts())
     #print(test_data["category_labels"].value_counts())
@@ -555,12 +558,11 @@ def main(label2id_dict, do_train):
     train_data = train_data[train_data["category_labels"] != 99]
     print(f"Length of train dataset after removing category ties: {len(train_data)}")
 
-    train_data, val_data = train_test_split(train_data, test_size=0.05, random_state=42, stratify=train_data["binary_labels"])
+    train_data, val_data = train_test_split(train_data, test_size=0.05, stratify=train_data["binary_labels"])
 
     test_data = test_data[test_data["binary_labels"] != 99]
     test_data = test_data[test_data["category_labels"] != 99]
     #test_data["text"] = test_data["text"].apply(clean_text) # clean the text by removing Twitter handles and URLs for better model performance
-
 
     model = AppearanceMultiTaskClassifier(
         model_ref,
@@ -576,14 +578,17 @@ def main(label2id_dict, do_train):
 
     print(vars(model))
 
-    if do_train:
-        train(model, train_data, val_data, label2id_dict, model_save_path=f"{model_ref.split("/")[-1]}.pt", model_ref=model_ref)
+    if train_flag:
+        trained_model = train(model, train_data, val_data, label2id_dict, best_save_path=f"checkpoints/{model_ref.split('/')[-1]}.pt", model_ref=model_ref)
 
-    evaluate_and_save(model, f"{model_ref.split("/")[-1]}.pt", test_data, "cuda", model_ref=model_ref)
+        evaluate_and_save(trained_model, load_pt_flag=False, model_save_path=f"classifier_state_dicts/{model_ref.split('/')[-1]}.pt", dataset=test_data, device="cuda", model_ref=model_ref)
+
+    else:
+        evaluate_and_save(model, load_pt_flag=True, pt_path = f"classifier_state_dicts/{model_ref.split('/')[-1]}.pt", dataset=test_data, device="cuda", model_ref=model_ref)
 
 
 if __name__ == "__main__":
     label2id_dict = {"level_1": {"NO":0, "YES":1}, "level_2": {"-":0, "DIRECT":1, "JUDGEMENTAL":2, "REPORTED":3}, "level_3": {"-":0, "IDEOLOGICAL-INEQUALITY":1, "STEREOTYPING-DOMINANCE":2, "OBJECTIFICATION":3, "SEXUAL-VIOLENCE":4, "MISOGYNY-NON-SEXUAL-VIOLENCE":5}}
 
-    main(label2id_dict, args.train)
+    main(label2id_dict, train_flag = args.train, train_data_name=args.train_data_name, train_data_path=args.train_data_path, model_ref=args.model)
 
