@@ -73,8 +73,6 @@ def compute_class_weights(labels, num_classes=6):
         pos_counts.append(sum(label[i] for label in labels))
     #print(f"Positive counts per class: {pos_counts}")
     neg_counts = [N - pos for pos in pos_counts]
-    #class_weights = [N/ (num_classes * val) for val in pos_counts]
-    #class_weights = (neg_counts / pos_counts).tolist()
     class_weights = [x/y for x,y in zip(neg_counts, pos_counts) if y > 0]
     print(f"Calculated class weights: {class_weights}")
     return class_weights
@@ -120,7 +118,7 @@ def create_data_loader(processed_data, tokenizer, batch_size=16):
     return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)    
 
 def set_multilingual(model_ref):
-    if model_ref in ["FacebookAI/xlm-roberta-large", "microsoft/mdeberta-v3-base", "annahaz/xlm-roberta-base-misogyny-sexism-indomain-mix-bal", "NLP-LTU/bertweet-large-sexism-detector"]:
+    if model_ref in ["FacebookAI/xlm-roberta-large", "microsoft/mdeberta-v3-base", "annahaz/xlm-roberta-base-misogyny-sexism-indomain-mix-bal", "NLP-LTU/bertweet-large-sexism-detector"]: # bertweet performs better on multilingual training data, despite being an English-language model 
         return True
     return False
 
@@ -202,7 +200,7 @@ class DataLoader:
 # Define model 
 # ----------------------------------
 
-class AppearanceMultiTaskClassifier(nn.Module):
+class GBVMultiTaskClassifier(nn.Module):
     def __init__(
         self,
         model_name: str,
@@ -497,6 +495,15 @@ def train(model, train_dataset, val_dataset, label2id_dict, best_save_path=None,
     return model 
 
 
+# ----------------------------------
+# Define optimization class 
+# ----------------------------------
+
+class Optimizer:
+    def __init__(self, model):
+        self.model = model
+
+
 
 # ----------------------------------
 # Define evaluation and saving functions 
@@ -564,7 +571,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
     test_data = test_data[test_data["category_labels"] != 99]
     #test_data["text"] = test_data["text"].apply(clean_text) # clean the text by removing Twitter handles and URLs for better model performance
 
-    model = AppearanceMultiTaskClassifier(
+    model = GBVMultiTaskClassifier(
         model_ref,
         num_category_labels=6,
         dropout=0.1,
@@ -573,7 +580,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         binary_loss_type="focal",#"ce",
         category_loss_type="focal",
         focal_gamma_binary=1.0,
-        focal_gamma_category=2.0,
+        focal_gamma_category=3.0,
     ).to("cuda")
 
     print(vars(model))
@@ -585,6 +592,8 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
 
     else:
         evaluate_and_save(model, load_pt_flag=True, pt_path = f"classifier_state_dicts/{model_ref.split('/')[-1]}.pt", dataset=test_data, device="cuda", model_ref=model_ref)
+
+    torch.save
 
 
 if __name__ == "__main__":
