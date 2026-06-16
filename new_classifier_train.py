@@ -23,14 +23,16 @@ import random
 import logging 
 from tqdm import tqdm
 
+import ast
+
 
 parser = ArgumentParser()
 parser.add_argument("--train", action="store_true", help="Whether to run training.")
 parser.add_argument("--train_data_name", type=str, default="EXIST", help="Name of the training dataset. Options: EXIST")
-parser.add_argument("--train_data_path", type=str, default="../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json", help="Path to the training dataset.")
-parser.add_argument("--val_data_path", type=str, default="../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json", help="Path to the validation dataset.")
+parser.add_argument("--train_data_path", nargs="?", type=str, const="../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json", help="Path to the training dataset.")
+parser.add_argument("--val_data_path", type=str, nargs="?", const="../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json", help="Path to the validation dataset.")
 parser.add_argument("--inf", action="store_true", help="Whether to run inference with the trained model.")
-parser.add_argument("--inf_data_path", type=str, default="/home/eddie/DHDC/exp10_mixed_weak_gold_deberta-v3-small_predictions_bluesky_posts_RecollectionApr28_cleaned.csv", help="Path to the dataset for inference.")
+parser.add_argument("--inf_data_path", type=str, nargs="?", const="/home/eddie/DHDC/exp10_mixed_weak_gold_deberta-v3-small_predictions_bluesky_posts_RecollectionApr28_cleaned.csv", help="Path to the dataset for inference.")
 parser.add_argument("--model", type=str, default="NLP-LTU/bertweet-large-sexism-detector", help="Model reference for the Hugging Face model to use. Options: FacebookAI/xlm-roberta-large, microsoft/mdeberta-v3-base, annahaz/xlm-roberta-base-misogyny-sexism-indomain-mix-bal, MilaNLProc/njh-classifier, NLP-LTU/bertweet-large-sexism-detector, cardiffnlp/twitter-roberta-base-hate-latest")
 args = parser.parse_args()
 
@@ -79,8 +81,8 @@ def clean_text(tweet):
     result = re.sub(r'https?\S+', '', result)
     result = re.sub(r'bit.ly/\S+', '', result) 
     result = re.sub(r'&[\S]+?;', '', result)
-    #result = re.sub(r'<MENTION_[1-9]>', '', result)  # for AMI dataset 
-    #result = re.sub(r'<URL>', '', result)  # for AMI dataset
+    result = re.sub(r'<MENTION_[1-9]>', '', result)  # for AMI dataset 
+    result = re.sub(r'<URL>', '', result)  # for AMI dataset
     #result = re.sub(r'#', ' ', result)
     return result
 
@@ -95,7 +97,7 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, inf=False):
     if not inf:
         binary_labels = torch.tensor(processed_data["binary_labels"].tolist())
         category_labels = torch.tensor(processed_data["category_labels"].tolist())
-        comment_id = torch.tensor(processed_data["id_EXIST"].tolist())
+        comment_id = torch.tensor(processed_data["data_id"].tolist())
         dataset = torch.utils.data.TensorDataset(
             encodings["input_ids"],
             encodings["attention_mask"],
@@ -121,75 +123,79 @@ def set_multilingual(model_ref):
 class CustomDataLoader:
     def __init__(self, data_name, data_path, split, label2id_dict, multilingual=False):
         self.data_name = data_name
-        if data_path is None:
-            if data_name == "EXIST":
-                if split == "train":
-                    self.data_path = "../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json"
-                elif split == "dev":
-                    self.data_path = "../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json"
-        else:
-            self.data_path = data_path
+        self.data_path = data_path
         self.split = split
         self.label2id_dict = label2id_dict
         self.multilingual = multilingual
 
     def load_raw_data(self):
-        if self.split == "train":
-            raw_data = pd.read_json(self.data_path,orient='index')
-            if self.multilingual:
-                dataset = raw_data[(raw_data["split"] == "TRAIN_EN") | (raw_data["split"] == "TRAIN_ES")]
+        print(self.data_path)
+        if self.data_path.endswith(".json"):
+            raw_data = pd.read_json(self.data_path, orient='index')
+        elif self.data_path.endswith(".csv") or self.data_path.endswith(".tsv"):
+            raw_data = pd.read_csv(self.data_path, sep='\t' if self.data_path.endswith(".tsv") else ',')
+        if self.multilingual and self.data_name == "EXIST":
+            if self.split == "train":
+                raw_data = raw_data[raw_data["split"].isin(["TRAIN_EN", "TRAIN_ES"])]
             else:
-                dataset = raw_data[raw_data["split"] == "TRAIN_EN"]
-        elif self.split == "dev":
-            raw_data = pd.read_json(self.data_path,orient='index')
-            dataset = raw_data[raw_data["split"] == "DEV_EN"]
-        return dataset
+                raw_data = raw_data[raw_data["split"].isin(["DEV_EN"])]
+        return raw_data
 
     def load_processed_data(self, level_list, clean=False):
         self.level_list = level_list 
         raw_data = self.load_raw_data()
+        raw_data.rename(columns={"tweet": "text"}, inplace=True) if "tweet" in raw_data.columns else None
         processed_data = self.handle_labels(raw_data)
         assert "labels_1" in processed_data.columns and "labels_3" in processed_data.columns, f"Expected columns 'labels_1' and 'labels_3' in processed data, but got {processed_data.columns}"
-        processed_data.rename(columns={"tweet": "text", "labels_1": "binary_labels", "labels_3": "category_labels"}, inplace=True)
-        processed_data["id_EXIST"] = processed_data.index
+        processed_data.rename(columns={"labels_1": "binary_labels", "labels_3": "category_labels"}, inplace=True)
         if clean:
             processed_data["text"] = processed_data["text"].apply(clean_text)
+        processed_data["data_id"] = processed_data.index.tolist()  # add a unique identifier for each data point, which can be used for tracking during inference
         return processed_data
 
-    def final_labels(self,x: dict, level):
+    def final_labels(self,x, level):
         labels = [0 for _ in range(len(self.label2id_dict[f"level_{level}"]))]
-        non_gbv = "NO" if level == 1 else "-"
-        if x[non_gbv] == 3:
-            return 99
-        elif x[non_gbv] > 3:
-            labels[0] = 1
-            return labels
-        else:
-            if level == 1:
-                labels[1] = 1
+        if self.data_name == "EXIST":
+            non_gbv = "NO" if level == 1 else "-"
+            if x[non_gbv] == 3:
+                return 99
+            elif x[non_gbv] > 3:
+                labels[0] = 1
                 return labels
-            elif level == 3:
-                for k, v in x.items():
-                    if k in self.label2id_dict[f"level_{level}"]:
-                        if v >= 2:
-                            labels[self.label2id_dict[f"level_{level}"][k]] = 1
-                labels[0] = 0 # ensure that the non-gbv label is set to 0 if any gbv label is present
-        if sum(labels) == 0:
-            return 99
+            else:
+                if level == 1:
+                    labels[1] = 1
+                    return labels
+                elif level == 3:
+                    for k, v in x.items():
+                        if k in self.label2id_dict[f"level_{level}"]:
+                            if v >= 2:
+                                labels[self.label2id_dict[f"level_{level}"][k]] = 1
+                    labels[0] = 0 # ensure that the non-gbv label is set to 0 if any gbv label is present
+            if sum(labels) == 0:
+                return 99
+        elif self.data_name == "AMI":
+            index = self.label2id_dict[f"level_{level}"][str(x)]
+            labels[index] = 1
         return labels
 
 
     def handle_labels(self, dataset):
         label_list = []
+        if self.data_name == "EXIST":
+            col_list = [f"labels_task1_{i}" for i in range(1,4)]
+        elif self.data_name in ["AMI"]:
+            col_list = ["misogynous", "target", "misogyny_category"]
+        print(col_list)
         for level in self.level_list:
-            col = f"labels_task1_{level}"
-            print(f"Processing level {col} for EXIST")
-            dataset = dataset.dropna(subset=[col]) # drop rows with missing labels for this level
-            dataset[f"labels_{level}"] = dataset[col].apply(lambda x: Counter(x) if isinstance(x[0], str) else Counter(flatten(x)))
             label_list.append(f"labels_{level}")
+            col = col_list[level-1]
+            print(f"Processing level {col} for {self.data_name}")
+            dataset = dataset.dropna(subset=[col]) # drop rows with missing labels for this level
+            dataset[f"labels_{level}"] = dataset[col].apply(lambda x: x if isinstance(x, str) or isinstance(x, int) else (Counter(x) if isinstance(x[0], str) else Counter(flatten(x))))
             dataset[f"labels_{level}"] = dataset[f"labels_{level}"].apply(lambda x: self.final_labels(x, level))
 
-        return dataset[["tweet"] + label_list]
+        return dataset[["text"] + label_list]
 
 
 # ----------------------------------
@@ -331,15 +337,16 @@ def predict_labels(outputs):
     binary_probs = torch.softmax(outputs["binary_logits"], dim=-1)[:, 1].detach().cpu()
     binary_pred_mask_bool = (binary_probs >= 0.5)  # 1D bool tensor
     category_probs = torch.sigmoid(outputs["category_logits"]).detach().cpu()
+    
     # zero out category predictions for non-GBV instances
-    category_probs = category_probs * binary_pred_mask_bool.unsqueeze(1).float()
+    # category_probs = category_probs * binary_pred_mask_bool.unsqueeze(1).float()
 
     # Normalize outputs to native Python types
     binary_probs_list = [float(x) for x in binary_probs.tolist()]
     category_pred_tensor = prob_to_label(category_probs)
     category_pred = [list(map(int, row)) for row in category_pred_tensor.tolist()]
     # enforce non-GBV -> category 0
-    category_pred = [pred if binary_pred_mask_bool[i].item() == True else [1,0,0,0,0,0] for i, pred in enumerate(category_pred)]
+    category_pred = [pred if binary_pred_mask_bool[i].item() == True else [1] + [0]*(len(pred)-1) for i, pred in enumerate(category_pred)]
     category_conf = [list(map(float, row)) for row in category_probs.tolist()]
 
     return binary_pred_mask_bool, binary_probs_list, category_pred, category_conf
@@ -400,11 +407,6 @@ def evaluate_model(model, loader, device) -> Dict[str, Any]:
     #print(f"Flat records dtype: {type(flat_records)}, example record: {flat_records[0] if len(flat_records) > 0 else 'N/A'}")
     true_category_list = [item["true_category"] for item in flat_records]
     pred_category_list = [item["pred_category"] for item in flat_records]
-    combined = list(zip(true_category_list, pred_category_list))
-    print(combined[:10])
-    for item in pred_category_list:
-        if item[0] == 1 and any(x == 1 for x in item[1:]):
-            print(f"Found instance where non-GBV category is predicted as 1 along with other categories: {item}")
 
     return {
         "records": flat_records,
@@ -455,7 +457,7 @@ class EarlyStopping:
 def train(model, train_dataset, val_dataset, label2id_dict, best_save_path=None, model_ref="microsoft/mdeberta-v3-base", lr=6e-6, weight_decay=0.03, device="cuda"):
     print("No checkpoint found, starting from scratch.")
 
-    binary_class_weights = compute_class_weights(train_dataset.binary_labels, num_classes=2)
+    binary_class_weights = compute_class_weights(train_dataset.binary_labels, num_classes=len(label2id_dict["level_1"]))
     category_class_weights = compute_class_weights(train_dataset.category_labels, num_classes=len(label2id_dict["level_3"]))
     binary_weight_tensor = torch.tensor(binary_class_weights, dtype=torch.float32, device=device)
     category_weight_tensor = torch.tensor(category_class_weights, dtype=torch.float32, device=device)
@@ -549,7 +551,7 @@ def train(model, train_dataset, val_dataset, label2id_dict, best_save_path=None,
 # ----------------------------------
 
 class Optimizer:
-    def __init__(self, dataset, device="cuda", model_ref="NLP-LTU/bertweet-large-sexism-detector"):
+    def __init__(self, dataset, device="cuda", model_ref="NLP-LTU/bertweet-large-sexism-detector", num_category_labels=6):
         self.tokenizer = AutoTokenizer.from_pretrained(model_ref)
         self.device = device
         self.model_ref = model_ref
@@ -563,7 +565,9 @@ class Optimizer:
         self.binary_weight_tensor = torch.tensor(binary_class_weights, dtype=torch.float32, device=self.device)
         self.category_weight_tensor = torch.tensor(category_class_weights, dtype=torch.float32, device=self.device)
         self.dataset = dataset
-    
+
+        self.num_category_labels = num_category_labels
+
     def objective(self, trial):
         """Optuna objective: builds a model with sampled hyperparameters, runs a few epochs and returns validation loss to minimize.
         Uses pruning and reports intermediate results back to Optuna.
@@ -577,7 +581,7 @@ class Optimizer:
         # build model
         model = GBVMultiTaskClassifier(
             model_name=self.model_ref,
-            num_category_labels=6,
+            num_category_labels=self.num_category_labels,
             dropout=0.1,
             lambda_binary=1.0,
             lambda_category=1.0,
@@ -708,15 +712,15 @@ def get_f1_score(records):
     f1_score["category_macro"] = sklearn.metrics.f1_score(y_true_category, y_pred_category, average="macro")
     return f1_score
 
-def calculate_icm(gold_labels, pred_labels):
-    gold_standard_icm = ICMCalculator(6, gold_labels).calculate_icm(gold_labels)
-    majority_class_icm = ICMCalculator(6, gold_labels).calculate_icm([[1,0,0,0,0,0] for _ in gold_labels]) # all predictions are non-GBV
-    minority_class_icm = ICMCalculator(6, gold_labels).calculate_icm([[0,0,0,0,1,0] for _ in gold_labels]) # all predictions are the most common GBV category
-    predicted_icm = ICMCalculator(6, gold_labels).calculate_icm(pred_labels)
+def calculate_icm(gold_labels, pred_labels, num_category_labels=6):
+    gold_standard_icm = ICMCalculator(num_category_labels, gold_labels).calculate_icm(gold_labels)
+    majority_class_icm = ICMCalculator(num_category_labels, gold_labels).calculate_icm([[1,0,0,0,0,0] for _ in gold_labels]) # all predictions are non-GBV
+    minority_class_icm = ICMCalculator(num_category_labels, gold_labels).calculate_icm([[0,0,0,0,1,0] for _ in gold_labels]) # all predictions are the most common GBV category
+    predicted_icm = ICMCalculator(num_category_labels, gold_labels).calculate_icm(pred_labels)
     print(f"Gold standard ICM: {gold_standard_icm:.4f}, Majority class ICM: {majority_class_icm:.4f}, Minority class ICM: {minority_class_icm:.4f}, Predicted ICM: {predicted_icm:.4f}")
 
 
-def evaluate_and_save(model, model_save_path=None, dataset=None, device="cuda", model_ref="NLP-LTU/bertweet-large-sexism-detector"):
+def evaluate_and_save(model, model_save_path=None, dataset=None, device="cuda", model_ref="NLP-LTU/bertweet-large-sexism-detector", train_data_name=None):
     loader = create_data_loader(dataset, AutoTokenizer.from_pretrained(model_ref), batch_size=16)
     evaluation = evaluate_model(model, loader, device)
     print(f"Evaluation results: Loss: {evaluation['loss']:.4f}, Binary Loss: {evaluation['loss_binary']:.4f}, Category Loss: {evaluation['loss_category']:.4f}")
@@ -726,7 +730,9 @@ def evaluate_and_save(model, model_save_path=None, dataset=None, device="cuda", 
     gold_labels = [record["true_category"] for record in evaluation["records"]]
     pred_labels = [record["pred_category"] for record in evaluation["records"]]
 
-    calculate_icm(gold_labels, pred_labels)
+    if train_data_name == "EXIST":
+        print("Calculating ICM for EXIST dataset...")
+        calculate_icm(gold_labels, pred_labels)
 
     if model_save_path is not None:
         torch.save(model.state_dict(), model_save_path)
@@ -750,7 +756,7 @@ def inference(model, inf_data, device):
 
     autocast_enabled = device == "cuda"
 
-    inf_data_loader = create_data_loader(inf_data, AutoTokenizer.from_pretrained("NLP-LTU/bertweet-large-sexism-detector"), batch_size=1, inf=True)
+    inf_data_loader = create_data_loader(inf_data, AutoTokenizer.from_pretrained("NLP-LTU/bertweet-large-sexism-detector"), batch_size=32, inf=True)
     print(f"Created inference data loader with {len(inf_data_loader)} batches.")
     with torch.no_grad():
         for step, batch in tqdm(enumerate(inf_data_loader), total=len(inf_data_loader), desc="Inference"):
@@ -776,17 +782,30 @@ def inference(model, inf_data, device):
                         "pred_category_confidence": category_conf[index],
                     }
                 )
+            
+            if step % 10000 == 0:
+                most_recent_records = local_records[-10000:]
+                df = pd.DataFrame(most_recent_records, columns=["comment_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
+                df.to_csv(f"inference_predictions.csv", mode="a", index=False)
+
     
     #gathered_records = gather_objects(local_records)
 
     return local_records
+
+def process_category_pred(pred_category_str, id2label_dict):
+    """Convert prediction category indices to labels and pipe-separated string."""
+    index_list = ast.literal_eval(pred_category_str)
+    labels = [id2label_dict[i] for i, val in enumerate(index_list) if val == 1]
+    pipe_str = "|".join(labels) if labels else "-"
+    return labels, pipe_str
 
 
 # ----------------------------------
 # Define main function
 # ----------------------------------
 
-def main(label2id_dict, train_flag=False, train_data_name = None, train_data_path=None, model_ref="NLP-LTU/bertweet-large-sexism-detector"):
+def main(label2id_dict, train_flag=False, train_data_name = None, train_data_path=None, val_data_path=None, model_ref="NLP-LTU/bertweet-large-sexism-detector"):
     print(f"Using model reference: {model_ref}")
 
     if args.train and args.inf:
@@ -796,20 +815,22 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
 
     multilingual = set_multilingual(model_ref)
 
-    test_data = CustomDataLoader(data_name = train_data_name, data_path = None,  split="dev", label2id_dict=label2id_dict, multilingual=True).load_processed_data([1, 3], clean=False)
+    num_category_labels = len(label2id_dict["level_3"])
+
+    test_data = CustomDataLoader(data_name = train_data_name, data_path = val_data_path,  split="dev", label2id_dict=label2id_dict, multilingual=True).load_processed_data([1, 3], clean=False)
     #print(test_data.head())
     #print(test_data["binary_labels"].value_counts())
     #print(test_data["category_labels"].value_counts())
     test_data = test_data[test_data["binary_labels"] != 99]
     test_data = test_data[test_data["category_labels"] != 99]
 
-    focal_gamma_category = 2 #1.33 #0.7 #2.8 #3.0
-    lr = 5e-6 #5e-6 #6e-6 #1.5e-5 #6e-6 #1e-5
+    focal_gamma_category = 5 #1.33 #0.7 #2.8 #3.0
+    lr = 1e-5 #5e-6 #6e-6 #1.5e-5 #6e-6 #1e-5
     weight_decay = 0.01 #0.01 #0.09 #0.03 #0.01
 
     model = GBVMultiTaskClassifier(
         model_ref,
-        num_category_labels=6,
+        num_category_labels=num_category_labels,
         dropout=0.1,
         lambda_binary=1.0,
         lambda_category=1.0, # OG 1.0
@@ -822,7 +843,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
     print(vars(model))
 
     # Optimizer study
-    #optuna_study = Optimizer(train_data, device="cuda", model_ref=model_ref).run_search(n_trials=20)
+    #optuna_study = Optimizer(train_data, device="cuda", model_ref=model_ref, num_category_labels=num_category_labels).run_search(n_trials=20)
     #print(f"Best hyperparameters from Optuna study: {optuna_study.best_params}")
     #exit()
 
@@ -842,20 +863,20 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
 
         train_data, val_data = train_test_split(train_data, test_size=0.05, stratify=train_data["binary_labels"])
 
-        trained_model = train(model, train_data, val_data, label2id_dict, best_save_path=f"checkpoints/{model_ref.split('/')[-1]}.pt", model_ref=model_ref, lr=lr, weight_decay=weight_decay, device="cuda")
+        trained_model = train(model, train_data, val_data, label2id_dict, best_save_path=f"checkpoints/{model_ref.split('/')[-1]}_{train_data_name}.pt", model_ref=model_ref, lr=lr, weight_decay=weight_decay, device="cuda")
 
-        model = evaluate_and_save(trained_model, load_pt_flag=False, model_save_path=f"classifier_state_dicts/{model_ref.split('/')[-1]}.pt", dataset=test_data, device="cuda", model_ref=model_ref)
+        model = evaluate_and_save(trained_model, model_save_path=f"classifier_state_dicts/{model_ref.split('/')[-1]}_{train_data_name}.pt", dataset=test_data, device="cuda", model_ref=model_ref, train_data_name=train_data_name)
 
     else:
-        model.load_state_dict(torch.load(f"classifier_state_dicts/{model_ref.split('/')[-1]}.pt"))
+        model.load_state_dict(torch.load(f"classifier_state_dicts/{model_ref.split('/')[-1]}_{train_data_name}.pt"))
         model.to("cuda")
 
     if not args.inf:
-        model = evaluate_and_save(model, dataset=test_data, device="cuda", model_ref=model_ref)
+        model = evaluate_and_save(model, dataset=test_data, device="cuda", model_ref=model_ref, train_data_name=train_data_name)
 
     elif args.inf:
         inf_data = pd.read_csv(args.inf_data_path)
-        inf_data = inf_data[["text", "comment_id"]].sample(n=1000).reset_index(drop=True)
+        inf_data = inf_data[["text", "comment_id"]] #.sample(n=1000).reset_index(drop=True)
         #inf_data = pd.DataFrame({"text": inf_data, "comment_id": [1, 2, 3]})
         predictions = inference(model, inf_data, device="cuda")
         predictions = pd.DataFrame(predictions, columns=["comment_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
@@ -868,10 +889,34 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
 
         sample = labelled_texts[["text", "pred_binary"]].groupby("pred_binary").sample(n=10)
         print(sample)
-
+        
+        # Process predictions and create category labels/pipes directly
+        id2label_dict = {v: k for k, v in label2id_dict["level_3"].items()}
+        
+        labelled_texts[["pred_category_labels", "pred_category_pipe"]] = labelled_texts["pred_category"].apply(
+            lambda x: pd.Series(process_category_pred(x, id2label_dict))
+        )
+        
+        labelled_texts.to_csv("inference_predictions.csv", index=False)
+        print(labelled_texts.head())
+    
 
 if __name__ == "__main__":
-    label2id_dict = {"level_1": {"NO":0, "YES":1}, "level_2": {"-":0, "DIRECT":1, "JUDGEMENTAL":2, "REPORTED":3}, "level_3": {"-":0, "IDEOLOGICAL-INEQUALITY":1, "STEREOTYPING-DOMINANCE":2, "OBJECTIFICATION":3, "SEXUAL-VIOLENCE":4, "MISOGYNY-NON-SEXUAL-VIOLENCE":5}}
+    if args.train_data_name == "EXIST":
+        label2id_dict = {"level_1": {"NO":0, "YES":1}, "level_2": {"-":0, "DIRECT":1, "JUDGEMENTAL":2, "REPORTED":3}, "level_3": {"-":0, "IDEOLOGICAL-INEQUALITY":1, "STEREOTYPING-DOMINANCE":2, "OBJECTIFICATION":3, "SEXUAL-VIOLENCE":4, "MISOGYNY-NON-SEXUAL-VIOLENCE":5}}
+        if not args.train_data_path:
+            args.train_data_path = "../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json"
+        if not args.val_data_path:
+            args.val_data_path = "../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json"
 
-    main(label2id_dict, train_flag = args.train, train_data_name=args.train_data_name, train_data_path=args.train_data_path, model_ref=args.model)
+    elif args.train_data_name == "AMI":
+        label2id_dict = {"level_1": {"0":0, "1":1}, "level_2":{"0":0, "active":1, "passive":2}, "level_3": {"0":0, "discredit":1, "sexual_harassment":2, "stereotype":3, "dominance":4, "derailing":5}}
+        if not args.train_data_path:
+            args.train_data_path = "../DHDC/data/combined_training_anon.tsv"
+        if not args.val_data_path:
+            args.val_data_path = "../DHDC/data/en_testing_labeled_anon.tsv"
+
+
+
+    main(label2id_dict, train_flag = args.train, train_data_name=args.train_data_name, train_data_path=args.train_data_path, val_data_path=args.val_data_path, model_ref=args.model)
 
