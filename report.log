@@ -1,5 +1,5 @@
 Loaded data for platform: bluesky
-MPs with posts but no replies: {'swdevonrebecca.bsky.social', 'linseyfarnsworthmp.bsky.social', 'adamthompsonmp.bsky.social', 'charliemaynard.bsky.social', 'lizforleicester.bsky.social', 'abarroscurtis.bsky.social'}
+MPs with posts but no replies: {'swdevonrebecca.bsky.social', 'adamthompsonmp.bsky.social', 'lizforleicester.bsky.social', 'charliemaynard.bsky.social', 'linseyfarnsworthmp.bsky.social', 'abarroscurtis.bsky.social'}
 MP details after merging:                 bluesky_handle  gender minority_status  ... pred_contains_appearance                  mp_handle_y post_count
 0    hackneyabbott.bsky.social  Female        Minority  ...                      NaN                          NaN        NaN
 1     angelaeagle1.bsky.social  Female         Unknown  ...                      1.0     angelaeagle1.bsky.social        8.0

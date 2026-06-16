@@ -68,7 +68,7 @@ def dataset_summary(df):
 
 def load_mp_details_and_merge(original_df):
     print("======== MP DETAILS ========")
-    mp_details = pd.read_csv("mp_details_full_info.csv", dtype={"theyworkforyou_id": str, "parliament_id": str, "wiki_birth_year": str})
+    mp_details = pd.read_csv("FINAL-mp-details.csv", dtype={"theyworkforyou_id": str, "parliament_id": str, "wiki_birth_year": str})
     mp_details = mp_details.replace("—", np.nan)
     original_df = original_df.merge(mp_details[["bluesky_handle", "minority_status", "ethnicity", "party", "wiki_birth_year"]], left_on="mp_handle", right_on="bluesky_handle", how="left")
     return original_df, mp_details
@@ -253,6 +253,39 @@ def load_day_counts(original_df):
         day_counts = pd.read_csv("day_counts.csv")
 
     return day_counts 
+
+def plot_appearance_by_engagement(day_counts, chart_type):
+    ''' Function to visualize proportion of appearance related replies by number of replies per day '''
+    plt.figure(figsize=(10, 6))
+    plt.title("Proportion of Appearance Related Replies by Number of Replies per Day")
+    plt.ylabel("Proportion of Appearance Related Replies (%)")
+
+    if chart_type == "scatter":
+        sns.scatterplot(x="total_replies", y="proportion_appearance_replies", data=day_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"})
+        plt.xscale("log")
+        plt.xlabel("Number of Replies (log scale)")
+        
+    if chart_type == "box":
+        sns.boxplot(x="log_reply_bins", y="proportion_appearance_replies", data=day_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"}, ax=ax)
+        plt.xlabel(f"Number of Replies (log scale from {day_counts['total_replies'].min()} to {day_counts['total_replies'].max()})")
+        labels = range(1, 6)
+        ax.set_xticklabels(labels, rotation=45)
+    
+    if chart_type == "bar":
+        sns.barplot(x="log_reply_bins", y="proportion_appearance_replies", data=day_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"}, ax=ax)
+        plt.xlabel(f"Number of Replies (log scale from {day_counts['total_replies'].min()} to {day_counts['total_replies'].max()})")
+        labels = range(1, 6)
+        ax.set_xticklabels(labels, rotation=45)
+    
+    plt.show()
+    plt.savefig(f"{chart_type}_proportion_appearance_replies_by_reply_count.png")
+    
+
+def log_reply_bins(day_counts):
+    ''' Function to create logarithmic bins for number of replies per day '''
+    day_counts["total_replies"] = day_counts["total_replies"].replace(0, np.nan) # Replace 0 with NaN to avoid issues with logarithmic scale
+    day_counts["log_reply_bins"] = pd.cut(day_counts["total_replies"], bins=np.logspace(np.log10(day_counts["total_replies"].min()), np.log10(day_counts["total_replies"].max()), 6, base=10), labels=np.logspace(np.log10(day_counts["total_replies"].min()), np.log10(day_counts["total_replies"].max()), 6, base=10)[1:])
+    return day_counts
     
 
 def appearance_by_engagement_analysis(original_df, active_reply_counts):
@@ -282,38 +315,12 @@ def appearance_by_engagement_analysis(original_df, active_reply_counts):
     day_counts = day_counts[day_counts["total_replies"] > 20] # Filter out days with no replies to avoid division by zero
 
     # Scatter of proportion of appearance related replies by number of replies per day
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(x="total_replies", y="proportion_appearance_replies", data=day_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"})
-    plt.xscale("log")
-    plt.title("Proportion of Appearance Related Replies by Number of Replies per Day")
-    plt.xlabel("Number of Replies (log scale)")
-    plt.ylabel("Proportion of Appearance Related Replies (%)")
-    plt.show()
-    plt.savefig("scatter_proportion_appearance_replies_by_reply_count.png")
+    plot_appearance_by_engagement(day_counts, "scatter")
 
-    day_counts["total_replies"] = day_counts["total_replies"].replace(0, np.nan) # Replace 0 with NaN to avoid issues with logarithmic scale
-    day_counts["log_reply_bins"] = pd.cut(day_counts["total_replies"], bins=np.logspace(np.log10(day_counts["total_replies"].min()), np.log10(day_counts["total_replies"].max()), 6, base=10), labels=np.logspace(np.log10(day_counts["total_replies"].min()), np.log10(day_counts["total_replies"].max()), 6, base=10)[1:])
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.boxplot(x="log_reply_bins", y="proportion_appearance_replies", data=day_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"}, ax=ax)
-    plt.title("Proportion of Appearance Related Replies by Number of Replies per Day")
-    plt.xlabel(f"Number of Replies (log scale from {day_counts['total_replies'].min()} to {day_counts['total_replies'].max()})")
-    labels = range(1, 6)
-    ax.set_xticklabels(labels, rotation=45)
-    plt.ylabel("Proportion of Appearance Related Replies (%)")
-    plt.show()
-    plt.savefig("box_proportion_appearance_replies_by_reply_count.png")
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.barplot(x="log_reply_bins", y="proportion_appearance_replies", data=day_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"}, ax=ax)
-    plt.title("Proportion of Appearance Related Replies by Number of Replies per Day")
-    plt.xlabel(f"Number of Replies (log scale from {day_counts['total_replies'].min()} to {day_counts['total_replies'].max()})")
-    labels = range(1, 6)
-    ax.set_xticklabels(labels, rotation=45)
-    plt.ylabel("Proportion of Appearance Related Replies (%)")
-    plt.show()
-    plt.savefig("bar_proportion_appearance_replies_by_reply_count.png")
-
+    day_counts = log_reply_bins(day_counts)
+    plot_appearance_by_engagement(day_counts, "box")
+    plot_appearance_by_engagement(day_counts, "bar")
+    
 
     #spearmans rank correlation between total_replies and proportion_appearance_replies
     correlation, p_value = stats.spearmanr(day_counts["total_replies"], day_counts["proportion_appearance_replies"],nan_policy='omit')
