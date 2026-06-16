@@ -39,8 +39,8 @@ def load_and_merge_data(platform="bluesky"):
 
     if platform == "bluesky":
         if not os.path.exists("bluesky_full_info_RecollectionApr28.csv"):
-            labelled_df = pd.read_csv("exp10_mixed_weak_gold_deberta-v3-small_predictions_bluesky_posts_RecollectionApr28_cleaned.csv")
-            raw_df = pd.read_csv("bluesky_posts_RecollectionApr28_cleaned.csv")
+            labelled_df = pd.read_csv("../DHDC/exp10_mixed_weak_gold_deberta-v3-small_predictions_bluesky_posts_RecollectionApr28_cleaned.csv")
+            raw_df = pd.read_csv("../DHDC/bluesky_posts_RecollectionApr28_cleaned.csv")
             original_df = raw_df.merge(labelled_df[["comment_id", "pred_contains_appearance", "pred_sub_category"]], left_on="item_id", right_on="comment_id", how="left")
 
             print(len(original_df))
@@ -511,23 +511,23 @@ def appearance_by_age_and_gender(original_df, active_reply_counts):
 
 
 def gbv_analysis(original_df, active_reply_counts):
-    gbv_labels_raw_data = pd.read_csv("Bluesky_posts_RecollectionApr28_cleaned_gbv_multiclass_predictions.csv")
+    gbv_labels_raw_data = pd.read_csv("inference_predictions.csv")
     print("GBV labels raw data loaded:")
     #print(gbv_labels_raw_data.columns)
-    original_df = original_df.merge(gbv_labels_raw_data[["item_id", "combined_binary_pred", "combined_subtypes_pipe"]], on="item_id", how="left")
+    original_df = original_df.merge(gbv_labels_raw_data[["comment_id", "pred_binary", "pred_category_pipe"]], left_on="item_id", right_on="comment_id", how="left")
     print("GBV labels merged with original_df:")
-    print(original_df.groupby("gender")["combined_binary_pred"].value_counts())
-    cross_tab = pd.crosstab(original_df["combined_binary_pred"], original_df["gender"], normalize="columns")
+    print(original_df.groupby("gender")["pred_binary"].value_counts())
+    cross_tab = pd.crosstab(original_df["pred_binary"], original_df["gender"], normalize="columns")
     print("Cross tab of GBV labels by gender:")
     print(cross_tab)
     # Count of subtypes per gender
-    subtypes = set(original_df["combined_subtypes_pipe"].dropna().str.split("|").explode())
+    subtypes = set(original_df["pred_category_pipe"].dropna().str.split("|").explode())
     for subtype in subtypes:
         male = original_df[original_df["gender"] == "Male"]
-        male_labels = male["combined_subtypes_pipe"].dropna().str.split("|").explode()
+        male_labels = male["pred_category_pipe"].dropna().str.split("|").explode()
         male_count = Counter(male_labels)[subtype]
         female = original_df[original_df["gender"] == "Female"]
-        female_labels = female["combined_subtypes_pipe"].dropna().str.split("|").explode()
+        female_labels = female["pred_category_pipe"].dropna().str.split("|").explode()
         female_count = Counter(female_labels)[subtype]
         print(f"Proportion of GBV subtype {subtype} by gender:")
         print(f"For men: {male_count / male['item_id'].nunique() * 100 if male['item_id'].nunique() > 0 else 0}%")
@@ -538,6 +538,9 @@ def main(args):
         original_df = pd.read_csv(args.input_file)
     else:
         original_df = load_and_merge_data(platform=args.platform)
+
+    # Load and merge GBV labels 
+
 
     rep_logger.info(f"Loaded data for platform: {args.platform}")
 
@@ -639,7 +642,7 @@ def main(args):
     return active_df, active_mp_details
 
 parser = argparse.ArgumentParser(description="Statistical analysis of appearance related replies to MPs on Bluesky")
-parser.add_argument("--input_file", type=str, default="bluesky_full_info_RecollectionApr28.csv", help="Path to the input CSV file")
+parser.add_argument("--input_file", type=str, help="Path to the input CSV file")
 parser.add_argument("--platform", type=str, default="bluesky", help="Platform to analyze (default: bluesky)")
 args = parser.parse_args()
 
