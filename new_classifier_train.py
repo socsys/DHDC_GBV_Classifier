@@ -25,6 +25,9 @@ from tqdm import tqdm
 
 import ast
 
+from huggingface_hub import PyTorchModelHubMixin
+
+
 
 parser = ArgumentParser()
 parser.add_argument("--train", action="store_true", help="Whether to run training.")
@@ -33,6 +36,7 @@ parser.add_argument("--train_data_path", nargs="?", type=str, const="../DHDC/dat
 parser.add_argument("--val_data_path", type=str, nargs="?", const="../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json", help="Path to the validation dataset.")
 parser.add_argument("--inf", action="store_true", help="Whether to run inference with the trained model.")
 parser.add_argument("--inf_data_path", type=str, nargs="?", const="/home/eddie/DHDC/exp10_mixed_weak_gold_deberta-v3-small_predictions_bluesky_posts_RecollectionApr28_cleaned.csv", help="Path to the dataset for inference.")
+parser.add_argument("--resume_inf", action="store_true", help="Whether to resume inference.")
 parser.add_argument("--model", type=str, default="NLP-LTU/bertweet-large-sexism-detector", help="Model reference for the Hugging Face model to use. Options: FacebookAI/xlm-roberta-large, microsoft/mdeberta-v3-base, annahaz/xlm-roberta-base-misogyny-sexism-indomain-mix-bal, MilaNLProc/njh-classifier, NLP-LTU/bertweet-large-sexism-detector, cardiffnlp/twitter-roberta-base-hate-latest")
 args = parser.parse_args()
 
@@ -91,7 +95,7 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, inf=False):
         processed_data["text"].tolist(),
         truncation=True,
         padding=True,
-        max_length=128,
+        max_length=256,
         return_tensors="pt",
     )
     if not inf:
@@ -202,7 +206,7 @@ class CustomDataLoader:
 # Define model 
 # ----------------------------------
 
-class GBVMultiTaskClassifier(nn.Module):
+class GBVMultiTaskClassifier(nn.Module, PyTorchModelHubMixin):
     def __init__(
         self,
         model_name: str,
@@ -543,7 +547,7 @@ def train(model, train_dataset, val_dataset, label2id_dict, best_save_path=None,
     print("Loading best model from checkpoint for final evaluation.")
     model.load_state_dict(torch.load(best_save_path))
     #torch.save(model.state_dict(), model_save_path)
-    return model 
+    return model, tokenizer
 
 
 # ----------------------------------
@@ -720,7 +724,7 @@ def calculate_icm(gold_labels, pred_labels, num_category_labels=6):
     print(f"Gold standard ICM: {gold_standard_icm:.4f}, Majority class ICM: {majority_class_icm:.4f}, Minority class ICM: {minority_class_icm:.4f}, Predicted ICM: {predicted_icm:.4f}")
 
 
-def evaluate_and_save(model, model_save_path=None, dataset=None, device="cuda", model_ref="NLP-LTU/bertweet-large-sexism-detector", train_data_name=None):
+def evaluate_and_save(model, model_save_path=None, dataset=None, device="cuda", model_ref="NLP-LTU/bertweet-large-sexism-detector", train_data_name=None, tokenizer=None):
     loader = create_data_loader(dataset, AutoTokenizer.from_pretrained(model_ref), batch_size=16)
     evaluation = evaluate_model(model, loader, device)
     print(f"Evaluation results: Loss: {evaluation['loss']:.4f}, Binary Loss: {evaluation['loss_binary']:.4f}, Category Loss: {evaluation['loss_category']:.4f}")
@@ -737,6 +741,9 @@ def evaluate_and_save(model, model_save_path=None, dataset=None, device="cuda", 
     if model_save_path is not None:
         torch.save(model.state_dict(), model_save_path)
         print(f"Model state dict saved at {model_save_path}")
+
+    model.save_pretrained('gbv-model')
+    tokenizer.save_pretrained('gbv-model')
     
     return model 
 
@@ -749,17 +756,37 @@ def split_into_slices(sequence, slice_size):
     for i in range(0, len(sequence), slice_size):
         yield slice(i, i + slice_size)
 
-def inference(model, inf_data, device):
+def inference(model, inf_data, device, resume=False, tokenizer=None):
     print("Starting inference...")
     model.eval()
-    local_records: List[Dict[str, Any]] = []
 
     autocast_enabled = device == "cuda"
 
-    inf_data_loader = create_data_loader(inf_data, AutoTokenizer.from_pretrained("NLP-LTU/bertweet-large-sexism-detector"), batch_size=32, inf=True)
+    batch_size = 32
+    save_steps = 1000
+    csv_path = f"{args.inf_data_path.split('.')[-2]}_inference_predictions_temp.csv"
+    columns = ["comment_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"]
+
+    print(f"Length of inference data: {len(inf_data)}")
+
+    tokenizer = tokenizer if tokenizer else AutoTokenizer.from_pretrained("NLP-LTU/bertweet-large-sexism-detector")
+
+    inf_data_loader = create_data_loader(inf_data, tokenizer, batch_size=batch_size, inf=True)
     print(f"Created inference data loader with {len(inf_data_loader)} batches.")
+
+    if resume == True:
+        print(f"Loading previous records from CSV...")
+        all_records = pd.read_csv(csv_path).to_dict(orient="records")
+        resume_step = len(all_records) // batch_size
+        print(f"Resuming inference from step {resume_step}.")
+    else:
+        all_records: List[Dict[str, Any]] = []
+
+    local_records: List[Dict[str, Any]] = []
     with torch.no_grad():
         for step, batch in tqdm(enumerate(inf_data_loader), total=len(inf_data_loader), desc="Inference"):
+            if resume == True and step < resume_step:
+                continue
             moved = move_batch_to_device(batch, device, inf=True)
             with torch.autocast(device_type=device, enabled=autocast_enabled):
                 outputs = model(
@@ -773,25 +800,27 @@ def inference(model, inf_data, device):
                 # normalize record fields to plain Python types
                 comment_id, category = item
 
-                local_records.append(
-                    {
+                record = {
                         "comment_id": comment_id,
                         "pred_binary": int(binary_pred_mask_bool[index].item()),
                         "pred_binary_prob": binary_probs_list[index],
                         "pred_category": category_pred[index],
                         "pred_category_confidence": category_conf[index],
                     }
-                )
-            
-            if step % 10000 == 0:
-                most_recent_records = local_records[-10000:]
-                df = pd.DataFrame(most_recent_records, columns=["comment_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
-                df.to_csv(f"inference_predictions.csv", mode="a", index=False)
 
-    
+                local_records.append(record)
+                all_records.append(record)
+
+            if step % save_steps == 0 or step == len(inf_data_loader) - 1:
+                print(f"Processed first {step} steps. Saving most recent records to CSV...")
+                df = pd.DataFrame(local_records, columns=["comment_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
+                df.to_csv(f"{args.inf_data_path.split('.')[-2]}_inference_predictions_temp.csv", mode="a", index=False, header=False if os.path.exists(csv_path) else True)
+                local_records: List[Dict[str, Any]] = []
+
+   
     #gathered_records = gather_objects(local_records)
 
-    return local_records
+    return all_records
 
 def process_category_pred(pred_category_str, id2label_dict):
     """Convert prediction category indices to labels and pipe-separated string."""
@@ -800,6 +829,29 @@ def process_category_pred(pred_category_str, id2label_dict):
     pipe_str = "|".join(labels) if labels else "-"
     return labels, pipe_str
 
+# ---------------------------------
+# Prep for use by gbv-d-toxify
+# ---------------------------------
+
+class GBVWrapper(nn.Module):
+    def __init__(self, base_model):
+        super().__init__()
+        self.model = base_model
+    
+    def forward(self, input_ids, attention_mask):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        prediction = [torch.zeros_like(outputs["category_logits"][0]) for _ in range(outputs["category_logits"].shape[0])]
+        for i,item in enumerate(zip(outputs["binary_logits"], outputs["category_logits"])):
+            binary_logits, category_logits = item
+            binary_probs = torch.softmax(binary_logits, dim=-1)[1]
+            category_probs = torch.sigmoid(category_logits)
+            # enforce non-GBV -> category 0
+            if binary_probs > 0.5:
+                prediction[i] = category_probs
+            else:
+                prediction[i] = torch.zeros_like(category_probs)
+                prediction[i][0] = 1  # Set the first category (non-GBV) to 1
+        return prediction
 
 # ----------------------------------
 # Define main function
@@ -824,8 +876,8 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
     test_data = test_data[test_data["binary_labels"] != 99]
     test_data = test_data[test_data["category_labels"] != 99]
 
-    focal_gamma_category = 5 #1.33 #0.7 #2.8 #3.0
-    lr = 1e-5 #5e-6 #6e-6 #1.5e-5 #6e-6 #1e-5
+    focal_gamma_category = 2 #1.33 #0.7 #2.8 #3.0
+    lr = 5e-6 #5e-6 #6e-6 #1.5e-5 #6e-6 #1e-5
     weight_decay = 0.01 #0.01 #0.09 #0.03 #0.01
 
     model = GBVMultiTaskClassifier(
@@ -839,6 +891,8 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         focal_gamma_binary=1.0,
         focal_gamma_category=focal_gamma_category,
     ).to("cuda")
+
+    
 
     print(vars(model))
 
@@ -863,22 +917,69 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
 
         train_data, val_data = train_test_split(train_data, test_size=0.05, stratify=train_data["binary_labels"])
 
-        trained_model = train(model, train_data, val_data, label2id_dict, best_save_path=f"checkpoints/{model_ref.split('/')[-1]}_{train_data_name}.pt", model_ref=model_ref, lr=lr, weight_decay=weight_decay, device="cuda")
+        trained_model, tokenizer = train(model, train_data, val_data, label2id_dict, best_save_path=f"checkpoints/{model_ref.split('/')[-1]}_{train_data_name}.pt", model_ref=model_ref, lr=lr, weight_decay=weight_decay, device="cuda")
 
-        model = evaluate_and_save(trained_model, model_save_path=f"classifier_state_dicts/{model_ref.split('/')[-1]}_{train_data_name}.pt", dataset=test_data, device="cuda", model_ref=model_ref, train_data_name=train_data_name)
+        model = evaluate_and_save(trained_model, model_save_path=f"classifier_state_dicts/{model_ref.split('/')[-1]}_{train_data_name}.pt", dataset=test_data, device="cuda", model_ref=model_ref, train_data_name=train_data_name, tokenizer=tokenizer)
 
     else:
         model.load_state_dict(torch.load(f"classifier_state_dicts/{model_ref.split('/')[-1]}_{train_data_name}.pt"))
+        tokenizer = AutoTokenizer.from_pretrained(model_ref)
+        if tokenizer.pad_token is None:
+            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            model.resize_token_embeddings(len(tokenizer))
         model.to("cuda")
 
     if not args.inf:
-        model = evaluate_and_save(model, dataset=test_data, device="cuda", model_ref=model_ref, train_data_name=train_data_name)
+        model = evaluate_and_save(model, dataset=test_data, device="cuda", model_ref=model_ref, train_data_name=train_data_name, tokenizer=tokenizer)
+
+        model.eval()
+
+        wrapped_model = GBVWrapper(model)
+        wrapped_model.eval()
+
+        dummy_ids = torch.randint(0, 1000, (1, 128), dtype=torch.long)
+        dummy_mask = torch.ones((1, 128), dtype=torch.long)
+        torch.onnx.export(wrapped_model, (dummy_ids.to("cuda"), dummy_mask.to("cuda")), "gbv_model.onnx", input_names=["input_ids", "attention_mask"], output_names=["logits"], dynamic_axes={"input_ids": {0: "batch_size"}, "attention_mask": {0: "batch_size"}, "logits": {0: "batch_size"}}, opset_version=14)
+
+        exit()
+
+
+        dummy_input = tokenizer(["This is a test input.", "She is a silly bitch!", "I'd love to take her out to dinner", "What a twat."], return_tensors="pt", max_length=128, padding="max_length", truncation=True)
+        og_output = model(input_ids=dummy_input["input_ids"].to("cuda"), attention_mask=dummy_input["attention_mask"].to("cuda"))
+        print(f"Output from original model: {og_output}")
+        output = wrapped_model(dummy_input["input_ids"].to("cuda"), dummy_input["attention_mask"].to("cuda"))
+        print(f"Output from wrapped model: {output}")
+
+        cp_test_data = test_data.copy()
+        cp_test_data.rename(columns={"category_labels": "labels"}, inplace=True)
+
+        cp_test_data["text"] = cp_test_data["text"].apply(lambda x: tokenizer(x, return_tensors="pt", padding="max_length", truncation=True, max_length=128))
+
+        predictions = []
+        with torch.no_grad():
+            for item in cp_test_data["text"]:
+                outputs = wrapped_model(input_ids=item["input_ids"].to("cuda"), attention_mask=item["attention_mask"].to("cuda"))
+                predictions.append(outputs)
+
+        print(cp_test_data.columns)
+        gold_labels = cp_test_data["labels"].to_list()
+
+        for i, prediction in enumerate(predictions):
+            prediction = prediction[0].tolist()
+            prediction = [1 if p > 0.5 else 0 for p in prediction]
+            predictions[i] = prediction
+
+
+        print(f"Gold labels: {gold_labels[:10]}")
+        print(f"Predictions: {predictions[:10]}")
+
+        icm_score = calculate_icm(gold_labels, predictions)
 
     elif args.inf:
         inf_data = pd.read_csv(args.inf_data_path)
         inf_data = inf_data[["text", "comment_id"]] #.sample(n=1000).reset_index(drop=True)
         #inf_data = pd.DataFrame({"text": inf_data, "comment_id": [1, 2, 3]})
-        predictions = inference(model, inf_data, device="cuda")
+        predictions = inference(model, inf_data, device="cuda", resume=args.resume, tokenizer=tokenizer)
         predictions = pd.DataFrame(predictions, columns=["comment_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
         labelled_texts = pd.merge(inf_data, pd.DataFrame(predictions), on="comment_id")
         print(labelled_texts.head())
