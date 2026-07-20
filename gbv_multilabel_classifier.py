@@ -938,18 +938,33 @@ def export_model(model, tokenizer, save_path, test_dataset=None):
         "dtype": "float32"
         }
 
-    wrapped_model.save_pretrained(save_path, config=config)
-    tokenizer.save_pretrained(save_path)
+    #wrapped_model.save_pretrained(save_path, config=config)
+    #tokenizer.save_pretrained(save_path)
 
 
-    if test_dataset is not None:
-        print("Evaluating wrapped model...")
-        _evaluate_wrapped_model(wrapped_model, tokenizer, test_dataset)
+    #if test_dataset is not None:
+    #    print("Evaluating wrapped model...")
+    #    _evaluate_wrapped_model(wrapped_model, tokenizer, test_dataset)
     
-    _save_model_for_extension(wrapped_model, tokenizer, save_path)
-    print(f"Model exported to {save_path} for use in gbv-d-toxify.")
+    #_save_model_for_extension(wrapped_model, tokenizer, save_path)
+    #print(f"Model exported to {save_path} for use in gbv-d-toxify.")
 
-    _evaluate_exported_model(save_path, tokenizer, wrapped_model)
+    #_evaluate_exported_model(save_path, tokenizer, wrapped_model)
+
+    model = onnx.load(f"{save_path}/onnx/model_quantized.onnx")
+
+    for opset_import in model.opset_import:
+        if opset_import.domain == 'ai.onnx.ml':
+            opset_import.version = 3
+
+    onnx.save(model, f"{save_path}/onnx/model_quantized.onnx")
+
+    # check if model opset version has successfully changed
+    model = onnx.load(f"{save_path}/onnx/model_quantized.onnx")
+    for opset_import in model.opset_import:
+        if opset_import.domain == 'ai.onnx.ml':
+            print(f"Updated opset version for ai.onnx.ml: {opset_import.version}")
+
 
 # ----------------------------------
 # Define main function
