@@ -102,11 +102,10 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, inf=False):
         max_length=256,
         return_tensors="pt",
     )
-    data_id = torch.tensor(processed_data["data_id"].tolist())
     if not inf:
         binary_labels = torch.tensor(processed_data["binary_labels"].tolist())
         category_labels = torch.tensor(processed_data["category_labels"].tolist())
-        #data_id = torch.tensor(processed_data["data_id"].tolist())
+        data_id = torch.tensor(processed_data["data_id"].tolist())
         dataset = torch.utils.data.TensorDataset(
             encodings["input_ids"],
             encodings["attention_mask"],
@@ -115,7 +114,7 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, inf=False):
             data_id
         )
     else:
-        #data_id = processed_data["data_id"].tolist() 
+        data_id = processed_data["data_id"].tolist() 
         dataset = torch.utils.data.TensorDataset(
             encodings["input_ids"],
             encodings["attention_mask"],
@@ -720,7 +719,7 @@ def split_into_slices(sequence, slice_size):
     for i in range(0, len(sequence), slice_size):
         yield slice(i, i + slice_size)
 
-def inference(model, tokenizer, inf_data, resume=False):
+def inference(model, tokenizer, inf_data, resume=False, device="cuda"):
     print("Starting inference...")
     model.eval()
 
@@ -730,6 +729,8 @@ def inference(model, tokenizer, inf_data, resume=False):
     csv_path = f"{args.inf_data_path.split('.')[-2]}_inference_predictions_temp.csv"
 
     print(f"Length of inference data: {len(inf_data)}")
+    inf_data.dropna(subset=["text"], inplace=True)
+    inf_data.reset_index(drop=True, inplace=True)
 
     inf_data_loader = create_data_loader(inf_data, tokenizer, batch_size=batch_size, inf=True)
     print(f"Created inference data loader with {len(inf_data_loader)} batches.")
@@ -784,7 +785,10 @@ def inference(model, tokenizer, inf_data, resume=False):
 
 def process_category_pred(pred_category_str, id2label_dict):
     """Convert prediction category indices to labels and pipe-separated string."""
-    index_list = ast.literal_eval(pred_category_str)
+    if isinstance(pred_category_str, str):
+        index_list = ast.literal_eval(pred_category_str)
+    else:
+        index_list = pred_category_str
     labels = [id2label_dict[i] for i, val in enumerate(index_list) if val == 1]
     pipe_str = "|".join(labels) if labels else "-"
     return labels, pipe_str
@@ -938,18 +942,18 @@ def export_model(model, tokenizer, save_path, test_dataset=None):
         "dtype": "float32"
         }
 
-    #wrapped_model.save_pretrained(save_path, config=config)
-    #tokenizer.save_pretrained(save_path)
+    wrapped_model.save_pretrained(save_path, config=config)
+    tokenizer.save_pretrained(save_path)
 
 
-    #if test_dataset is not None:
-    #    print("Evaluating wrapped model...")
-    #    _evaluate_wrapped_model(wrapped_model, tokenizer, test_dataset)
+    if test_dataset is not None:
+        print("Evaluating wrapped model...")
+        _evaluate_wrapped_model(wrapped_model, tokenizer, test_dataset)
     
-    #_save_model_for_extension(wrapped_model, tokenizer, save_path)
-    #print(f"Model exported to {save_path} for use in gbv-d-toxify.")
+    _save_model_for_extension(wrapped_model, tokenizer, save_path)
+    print(f"Model exported to {save_path} for use in gbv-d-toxify.")
 
-    #_evaluate_exported_model(save_path, tokenizer, wrapped_model)
+    _evaluate_exported_model(save_path, tokenizer, wrapped_model)
 
     model = onnx.load(f"{save_path}/onnx/model_quantized.onnx")
 
@@ -1061,9 +1065,10 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
     if args.inf:
         inf_data = pd.read_csv(args.inf_data_path)
         data_id_col = "comment_id" if "comment_id" in inf_data.columns else "item_id" if "item_id" in inf_data.columns else "data_id" # Update to match inf dataset labeling 
+        inf_data.rename(columns={"pure_text": "text"}, inplace=True) if "pure_text" in inf_data.columns else None 
         inf_data = inf_data[["text", data_id_col]]
         inf_data.rename(columns={data_id_col: "data_id"}, inplace=True)
-        predictions = inference(model, tokenizer, inf_data, device="cuda", resume=args.resume)
+        predictions = inference(model, tokenizer, inf_data, resume=args.resume_inf)
         predictions = pd.DataFrame(predictions, columns=["data_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
         labelled_texts = pd.merge(inf_data, pd.DataFrame(predictions), on="data_id")
         print(labelled_texts.head())
@@ -1082,8 +1087,8 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         labelled_texts[["pred_category_labels", "pred_category_pipe"]] = labelled_texts["pred_category"].apply(
             lambda x: pd.Series(process_category_pred(x, id2label_dict))
         )
-        
-        labelled_texts.to_csv("inference_predictions.csv", index=False)
+
+        labelled_texts.to_csv(f"{args.inf_data_path.split('.')[-2]}_predictions.csv", index=False)
         print(labelled_texts.head())
     
 
