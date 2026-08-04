@@ -778,7 +778,7 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda"):
                 df.to_csv(f"{args.inf_data_path.split('.')[-2]}_inference_predictions_temp.csv", mode="a", index=False, header=False if os.path.exists(csv_path) else True)
                 local_records: List[Dict[str, Any]] = []
 
-   
+    print(f"Length of all_records: {len(all_records)}")
     #gathered_records = gather_objects(local_records)
 
     return all_records
@@ -1065,7 +1065,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
     if args.inf:
         inf_data = pd.read_csv(args.inf_data_path)
         data_id_col = "comment_id" if "comment_id" in inf_data.columns else "item_id" if "item_id" in inf_data.columns else "data_id" # Update to match inf dataset labeling 
-        inf_data.rename(columns={"pure_text": "text"}, inplace=True) if "pure_text" in inf_data.columns else None 
+        inf_data.rename(columns={"cleaned_text": "text"}, inplace=True) if "cleaned_text" in inf_data.columns else None 
         inf_data = inf_data[["text", data_id_col]]
         inf_data.rename(columns={data_id_col: "data_id"}, inplace=True)
         predictions = inference(model, tokenizer, inf_data, resume=args.resume_inf)
@@ -1088,8 +1088,10 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
             lambda x: pd.Series(process_category_pred(x, id2label_dict))
         )
 
-        labelled_texts.to_csv(f"{args.inf_data_path.split('.')[-2]}_predictions.csv", index=False)
+        print(f"Length of labelled_texts: {len(labelled_texts)}")
         print(labelled_texts.head())
+
+        labelled_texts.to_csv(f"{args.inf_data_path.split('.')[-2]}_predictions.csv", index=False)
     
 
 if __name__ == "__main__":

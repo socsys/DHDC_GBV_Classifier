@@ -25,6 +25,8 @@ import logging
 from collections import Counter
 
 import statsmodels.formula.api as smf
+import seaborn as sns
+
 
 
 # Logger for report
@@ -44,9 +46,12 @@ def load_and_merge_data(platform="bluesky", new=False):
         if new==True:
             raw_df = pd.read_csv("bluesky_posts_currentMPs_Jun_cleaned.csv")
             labelled_df = pd.read_csv("bluesky_posts_currentMPs_Jun_cleaned_predictions.csv")
+            print(f"Length of raw_df: {len(raw_df)}")
+            print(f"Length of labelled_df: {len(labelled_df)}")
             original_df = raw_df.merge(labelled_df[["data_id","pred_binary", "pred_category_pipe"]], left_on="item_id", right_on="data_id", how="left")
 
             print(len(original_df))
+            print(f"Number of items with missing data_id in original_df: {original_df['data_id'].isna().sum()}")
 
             original_df["created_at"] = original_df["created_at"].apply(lambda x: pd.to_datetime(x, errors='coerce')) # Force created_at to be datetime, coercing errors to NaT
 
@@ -78,6 +83,7 @@ def load_mp_details_and_merge(original_df):
     return original_df, mp_details
 
 def mp_post_analysis(original_df):
+    ''' Function which analyzes posts by MPs, including number of posts, number of MPs with posts, and number of posts by gender and duplicate status. Returns a dataframe with the number of posts by each MP. '''
     print("======== MP POST ANALYSIS ========")
     posts_only = original_df[original_df["item_type"] == "post"]
     print(f"Number of MPs with posts: {posts_only['mp_handle'].nunique()}")
@@ -88,20 +94,18 @@ def mp_post_analysis(original_df):
     print(posts_only.groupby("duplicates")["item_id"].count())
     print("Number of posts by gender:")
     print(posts_only.groupby("gender")["item_id"].count())
-    print("Reply to post ratio by gender:")
-    reply_counts = original_df[original_df["item_type"].isin(["reply-1", "reply-2"])].groupby("gender")["item_id"].count()
-    print(reply_counts / posts_only.groupby("gender")["item_id"].count())
     return post_counts
 
 def proportion_replies_by_gender(original_df):
     print("======== PROPORTION OF REPLIES BY GENDER ========")
+    assert all(original_df["item_type"].isin(["reply-1", "reply-2"])), "Not all items in original_df are replies."
     print(f"Length of dataset: {len(original_df)}")
     print("Proportion of replies by gender:")
     replies_to_women = original_df[original_df["gender"] == "Female"]
     print("Women:", len(replies_to_women)/len(original_df) * 100)
     print("Male:", len(original_df[original_df["gender"] == "Male"])/len(original_df) * 100)
     print("Number of replies by gender:")
-    print(original_df[original_df["item_type"].isin(["reply-1", "reply-2"])].groupby("gender")["item_id"].count())
+    print(original_df.groupby("gender")["item_id"].count())
 
 def duplicates_analysis(original_df, label="pred_contains_appearance"):
     print("======== DUPLICATES ANALYSIS ========")
@@ -111,13 +115,12 @@ def duplicates_analysis(original_df, label="pred_contains_appearance"):
     print(original_df.groupby("duplicates")[label].mean()*100)
 
 def mp_reply_analysis(original_df):
-    ''' Function to analyze replies to MPs '''
+    ''' Function to analyze replies to MPs and return a dataframe with the number of replies by each MP. '''
     print("======== MP REPLY ANALYSIS ========")
     assert all(original_df["item_type"].isin(["reply-1", "reply-2"])), "Not all items in original_df are replies."
     print(f"Number of MPs with replies: {original_df['mp_handle'].nunique()}")
     print(f"Number of MPs with replies by gender: {original_df.groupby('gender')['mp_handle'].nunique()}")
     reply_counts = original_df.groupby("mp_handle").size().reset_index(name="reply_count")
-    #reply_counts["pred_contains_appearance"] = original_df.groupby("mp_handle")["pred_contains_appearance"].sum().values
     return reply_counts
 
 def plot_reply_distribution(reply_counts):
@@ -170,7 +173,6 @@ def compare_demographics_by_engagement_level(reply_counts):
 def mannwhitney_by_group(reply_counts, label="reply_count", group_by="gender"):
     ''' Function to run a Mann-Whitney U test comparing the distribution of a specified label (e.g. reply_count) between two groups defined by a specified demographic variable (e.g. gender, minority_status) '''
     print(f"======== COMPARING {label.upper()} BY {group_by.upper()} ========")
-    assert all(reply_counts["active_filter"] == True), "Not all MPs in df are active. Please filter for active MPs before comparing"
     mean_replies_by_gender = reply_counts.groupby(group_by)[label].mean()
     print(f"Mean {label} by {group_by}:")
     print(mean_replies_by_gender)
@@ -491,6 +493,10 @@ def appearance_by_race_and_gender(original_df, active_reply_counts, label="pred_
     print(linear_model.summary())
 
     mannwhitney_by_group(active_reply_counts, label=percentage_label, group_by="minority_status")
+    women = active_reply_counts[active_reply_counts["gender"] == "Female"]
+    mannwhitney_by_group(women, label=percentage_label, group_by="minority_status")
+    men = active_reply_counts[active_reply_counts["gender"] == "Male"]
+    mannwhitney_by_group(men, label=percentage_label, group_by="minority_status")
 
 def handle_age_data(active_df, active_mp_details):
     print("======== HANDLING AGE DATA ========")
@@ -507,11 +513,6 @@ def handle_age_data(active_df, active_mp_details):
     active_mp_details["age_group"] = active_mp_details["wiki_birth_year"].apply(lambda x: age_mapping.get(2026 - x, "Unknown") if pd.notna(x) else "Unknown")
     active_df["age_group"] = active_df["wiki_birth_year"].apply(lambda x: age_mapping.get(2026 - x, "Unknown") if pd.notna(x) else "Unknown")
 
-    # display all pandas columns in the output
-    pd.set_option('display.max_columns', None)
-
-    print(active_mp_details[["mp_handle", "wiki_birth_year","age_group"]].head())
-    print(active_df[["mp_handle", "cleaned_text", "wiki_birth_year","age_group", "pred_binary", "pred_contains_appearance"]].head())
 
     return active_df, active_mp_details
 
@@ -519,28 +520,28 @@ def handle_age_data(active_df, active_mp_details):
 def appearance_by_age_and_gender(original_df, active_mp_details, label="percentage_appearance_replies"):
     print(f"========== AGE AND {label.replace('_', ' ').upper()} ==========")
 
-    active_reply_counts = active_reply_counts[active_reply_counts["wiki_birth_year"].notna()]
-    active_reply_counts["age"] = 2026 - active_reply_counts["wiki_birth_year"].astype(int)
-    print(active_reply_counts["age"].describe())
+    active_mp_details = active_mp_details[active_mp_details["wiki_birth_year"].notna()]
+    active_mp_details["age"] = 2026 - active_mp_details["wiki_birth_year"].astype(int)
+    print(active_mp_details["age"].describe())
 
     # Correlation between age and percentage of appearance related replies
-    correlation, p_value = stats.spearmanr(active_reply_counts["age"].dropna(), active_reply_counts[label].dropna())
+    correlation, p_value = stats.spearmanr(active_mp_details["age"].dropna(), active_mp_details[label].dropna())
     print("Spearman's rank correlation between age and percentage of appearance related replies:")
     print(f"Correlation: {correlation}, p-value: {p_value}")
 
     # Correlation between age and percentage of appearance related replies for women
-    correlation_female, p_value_female = stats.spearmanr(active_reply_counts[active_reply_counts["gender"] == "Female"]["age"].dropna(), active_reply_counts[active_reply_counts["gender"] == "Female"][label].dropna())
+    correlation_female, p_value_female = stats.spearmanr(active_mp_details[active_mp_details["gender"] == "Female"]["age"].dropna(), active_mp_details[active_mp_details["gender"] == "Female"][label].dropna())
     print("Spearman's rank correlation between age and percentage of appearance related replies for women:")
     print(f"Correlation: {correlation_female}, p-value: {p_value_female}")
 
     # Correlation between age and percentage of appearance related replies for men
-    correlation_male, p_value_male = stats.spearmanr(active_reply_counts[active_reply_counts["gender"] == "Male"]["age"].dropna(), active_reply_counts[active_reply_counts["gender"] == "Male"][label].dropna())
+    correlation_male, p_value_male = stats.spearmanr(active_mp_details[active_mp_details["gender"] == "Male"]["age"].dropna(), active_mp_details[active_mp_details["gender"] == "Male"][label].dropna())
     print("Spearman's rank correlation between age and percentage of appearance related replies for men:")
     print(f"Correlation: {correlation_male}, p-value: {p_value_male}")
 
     # Scatter plot of percentage of appearance related replies by age, colored by gender
     plt.figure(figsize=(10, 6))
-    sns.scatterplot(x="age", y=label, data=active_reply_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"})
+    sns.scatterplot(x="age", y=label, data=active_mp_details, hue="gender", palette={"Male": "blue", "Female": "lightblue"})
     #sns.regplot(x="age", y="percentage_appearance_replies", data=active_reply_counts[active_reply_counts["gender"] == "Male"], scatter=False, ax=plt.gca(), color="blue", label="Males")
     #sns.regplot(x="age", y="percentage_appearance_replies", data=active_reply_counts[active_reply_counts["gender"] == "Female"], scatter=False, ax=plt.gca(), color="lightblue", label="Females")
     plt.title(f"{label.replace('_', ' ').title()} by Age")
@@ -551,12 +552,12 @@ def appearance_by_age_and_gender(original_df, active_mp_details, label="percenta
     plt.savefig(f"scatter_age_by_{label}.png")
 
     plt.figure(figsize=(10, 6))
-    print(f"Minimum age: {active_reply_counts['age'].min()}, Maximum age: {active_reply_counts['age'].max()}, Number of MPs with age data: {active_reply_counts['age'].notna().sum()}")
+    print(f"Minimum age: {active_mp_details['age'].min()}, Maximum age: {active_mp_details['age'].max()}, Number of MPs with age data: {active_mp_details['age'].notna().sum()}")
     # Mean percentage of appearance related replies by age group and gender
-    active_reply_counts["age_group"] = pd.cut(active_reply_counts["age"], bins=[24, 35, 45, 55, 65, 100], labels=["24-34", "35-44", "45-54", "55-64", "65+"], include_lowest=True)
+    active_mp_details["age_group"] = pd.cut(active_mp_details["age"], bins=[24, 35, 45, 55, 65, 100], labels=["24-34", "35-44", "45-54", "55-64", "65+"], include_lowest=True)
     # Number of MPs in each age group by gender
-    print(active_reply_counts.groupby(["age_group", "gender"])["mp_handle"].nunique())
-    mean_appearance_by_age_group = active_reply_counts.groupby(["age_group", "gender"])[label].mean().reset_index()
+    print(active_mp_details.groupby(["age_group", "gender"])["mp_handle"].nunique())
+    mean_appearance_by_age_group = active_mp_details.groupby(["age_group", "gender"])[label].mean().reset_index()
     print(mean_appearance_by_age_group)
     sns.barplot(x="age_group", y=label, data=mean_appearance_by_age_group, hue="gender", palette={"Male": "blue", "Female": "lightblue"}, errorbar="sd")
     plt.title(f"{label.replace('_', ' ').title()} by Age Group and Gender")
@@ -566,28 +567,72 @@ def appearance_by_age_and_gender(original_df, active_mp_details, label="percenta
     plt.show()
     plt.savefig(f"bar_age_group_by_{label}.png")
 
-def gbv_analysis(original_df, active_reply_counts):
-    gbv_labels_raw_data = pd.read_csv("inference_predictions.csv")
-    print("GBV labels raw data loaded:")
-    #print(gbv_labels_raw_data.columns)
-    original_df = original_df.merge(gbv_labels_raw_data[["comment_id", "pred_binary", "pred_category_pipe"]], left_on="item_id", right_on="comment_id", how="left")
-    print("GBV labels merged with original_df:")
-    print(original_df.groupby("gender")["pred_binary"].value_counts())
-    cross_tab = pd.crosstab(original_df["pred_binary"], original_df["gender"], normalize="columns")
-    print("Cross tab of GBV labels by gender:")
-    print(cross_tab)
-    # Count of subtypes per gender
-    subtypes = set(original_df["pred_category_pipe"].dropna().str.split("|").explode())
-    for subtype in subtypes:
-        male = original_df[original_df["gender"] == "Male"]
-        male_labels = male["pred_category_pipe"].dropna().str.split("|").explode()
-        male_count = Counter(male_labels)[subtype]
-        female = original_df[original_df["gender"] == "Female"]
-        female_labels = female["pred_category_pipe"].dropna().str.split("|").explode()
-        female_count = Counter(female_labels)[subtype]
-        print(f"Proportion of GBV subtype {subtype} by gender:")
-        print(f"For men: {male_count / male['item_id'].nunique() * 100 if male['item_id'].nunique() > 0 else 0}%")
-        print(f"For women: {female_count / female['item_id'].nunique() * 100 if female['item_id'].nunique() > 0 else 0}%")
+def one_hot_gbv_category_labels(active_df):
+    print("======== ONE HOT ENCODING GBV CATEGORY LABELS ========")
+    # One hot encode the GBV category labels
+    gbv_categories = active_df["pred_category_pipe"].dropna().str.split("|").explode().unique()
+    print(f"GBV categories: {gbv_categories}")
+
+    for category in gbv_categories:
+        active_df[category] = active_df["pred_category_pipe"].apply(lambda x: 1 if pd.notna(x) and category in x.split("|") else 0)
+    
+    return active_df, gbv_categories
+
+def analyse_gbv_subcategories(active_df, gbv_subcategories, only=False, comparison="gender"):
+    print("======== ANALYSING GBV SUBCATEGORIES ========")
+    if comparison == "gender":
+        a = "Female"
+        b = "Male"
+        a_df = active_df[active_df["gender"] == "Female"]
+        b_df = active_df[active_df["gender"] == "Male"]
+    elif comparison == "minority_status":
+        active_df = active_df[active_df["gender"] == "Female"] # Filter out male MPs 
+        a = "Minority"
+        b = "Unknown"
+        a_df = active_df[active_df["minority_status"] == "Minority"]
+        b_df = active_df[active_df["minority_status"] == "Unknown"]
+    elif comparison == "age_group":
+        active_df = active_df[active_df["gender"] == "Female"] # Filter out male MPs
+        a = ["24-34", "35-44"]
+        b = ["45-54", "55-64", "65+"]
+        a_df = active_df[active_df["age_group"].isin(a)]
+        b_df = active_df[active_df["age_group"].isin(b)]
+
+    print(f"Percentage of GBV related replies by {comparison}:")
+    print(a_df["pred_binary"].sum() / len(a_df) * 100)
+    print(b_df["pred_binary"].sum() / len(b_df) * 100)
+
+    if only == True:
+        a_df = a_df[a_df["pred_binary"] == 1] # Filter out replies which are not GBV related
+        print(f"Number of GBV related replies: {len(a_df)}")
+        b_df = b_df[b_df["pred_binary"] == 1] # Filter out replies which are not GBV related
+        print(f"Number of GBV related replies: {len(b_df)}")
+
+    percentages_df = pd.DataFrame(columns=["subcategory", f"{a}_count", f"{a}_percentage", f"{b}_count", f"{b}_percentage"])
+
+    # Proportion of each GBV subcategory by gender
+    for subcategory in gbv_subcategories:
+        if subcategory in ["-", "MISOGYNY-NON-SEXUAL-VIOLENCE"]:
+            continue
+        subcategory_count = a_df[subcategory].sum()
+        proportion = subcategory_count / len(a_df) * 100
+        print(f"{subcategory}: {subcategory_count} ({proportion:.2f}%)")
+        percentages_df = pd.concat([percentages_df, pd.DataFrame({"subcategory": [subcategory], f"{a}_count": [subcategory_count], f"{a}_percentage": [proportion]})], ignore_index=True)
+
+    for subcategory in gbv_subcategories:
+        if subcategory in ["-", "MISOGYNY-NON-SEXUAL-VIOLENCE"]:
+            continue
+        subcategory_count = b_df[subcategory].sum()
+        proportion = subcategory_count / len(b_df) * 100
+        print(f"{subcategory}: {subcategory_count} ({proportion:.2f}%)")
+        percentages_df.loc[percentages_df["subcategory"] == subcategory, f"{b}_count"] = subcategory_count
+        percentages_df.loc[percentages_df["subcategory"] == subcategory, f"{b}_percentage"] = proportion
+
+    relevant_subcategories = gbv_subcategories[gbv_subcategories != "-"]
+    relevant_subcategories = relevant_subcategories[relevant_subcategories != "MISOGYNY-NON-SEXUAL-VIOLENCE"]
+
+    print(percentages_df)
+
 
 def select_active_mps(mp_details, original_df, reply_counts):
     print("======== SELECTING ACTIVE MPs ========")
@@ -597,7 +642,6 @@ def select_active_mps(mp_details, original_df, reply_counts):
     compare_demographics_by_engagement_level(mp_details)
 
     active_mp_details = mp_details[mp_details["active_filter"] == True]
-    active_mp_details["reply_to_post_ratio"] = active_mp_details["reply_count"] / active_mp_details["post_count"]
 
     active_mps_list = active_mp_details["mp_handle"].tolist()
     print(f"Number of active MPs: {len(active_mps_list)}")
@@ -623,14 +667,28 @@ def proportion_target_replies_by_gender(active_df, label="pred_binary"):
     cross_tab = pd.crosstab(active_df[label], active_df["gender"], normalize="columns")
     print(cross_tab)
 
+def load_appearance_labels(active_df):
+    appearance_df = pd.read_csv("bluesky_replies_jan-jun_for_analysis.csv")
+    print(f"Length of appearance_df: {len(appearance_df)}")
+
+    active_df = active_df.merge(appearance_df[["item_id", "pred_contains_appearance"]], on="item_id", how="left")
+    print(f"Length of active_df after merging with appearance_df: {len(active_df)}")
+    assert active_df["pred_contains_appearance"].isna().sum() == 0, "There are items in active_df with no appearance related labels after merging with appearance_df."
+    assert active_df["pred_binary"].isna().sum() == 0, "There are items in active_df with no GBV related labels after merging with appearance_df."
+    assert active_df["cleaned_text"].isna().sum() == 0, "There are items in active_df with no cleaned_text after merging with appearance_df."
+    assert active_df["data_id"].isna().sum() == 0, "There are items in active_df with no data_id after merging with appearance_df."
+
+    return active_df
+
+
 def main(args):
     if args.input_file:
         original_df = pd.read_csv(args.input_file)
     else:
         original_df = load_and_merge_data(platform=args.platform, new=args.new)
 
-    # Load and merge GBV labels 
-
+    #print(f"Number of items with missing data_id in original_df before time filtering: {original_df['data_id'].isna().sum()}")
+    #print(f"Number of items with missing cleaned_text in original_df before time filtering: {original_df['cleaned_text'].isna().sum()}")
 
     rep_logger.info(f"Loaded data for platform: {args.platform}")
 
@@ -638,53 +696,52 @@ def main(args):
     original_df["created_at"] = pd.to_datetime(original_df["created_at"], errors='coerce', utc=True, format="mixed")
     original_df = original_df[(original_df["created_at"] >= pd.to_datetime("2026-01-01T00:00:00Z"))&(original_df["created_at"] <= pd.to_datetime("2026-06-30T23:59:59Z"))]
 
+
+    #print(f"Number of items with missing data_id in original_df after time filtering: {original_df['data_id'].isna().sum()}")
+    #print(f"Number of items with missing cleaned_text in original_df after time filtering: {original_df['cleaned_text'].isna().sum()}")
+
+    original_df = original_df[original_df["cleaned_text"].notna()]
+    print(f"Length of original_df after filtering for non-null cleaned_text: {len(original_df)}")
+    print(f"Number of items with missing pred_binary in original_df after filtering for non-null cleaned_text: {original_df['pred_binary'].isna().sum()}")
+    print(f"Number of items with missing data_id in original_df after filtering for non-null cleaned_text: {original_df['data_id'].isna().sum()}")
+
     ## Summary statistics before processing 
     #dataset_summary(original_df)
 
     ## Load MP details and merge with original_df
     original_df, mp_details = load_mp_details_and_merge(original_df)
-
-
-    ## Analyse By Reply Type 
-    #appearance_by_reply_type_analysis(original_df)
-
-    ## Analyse by post type (including duplicates)
-    #mp_post_analysis(original_df)
-    #mp_replies_analysis(original_df)
-
+    
     ## Export list of MPs who have bluesky account but did not post during the period of analysis
-    mps_with_posts = set(original_df["mp_handle"])
-    mps_with_no_posts = set(mp_details[f"{args.platform}_handle"]) - mps_with_posts
-    rep_logger.info(f"MPs with no posts during the period of analysis: {mps_with_no_posts}")
-    with open(f"mps_with_no_posts_{args.platform}.txt", "w") as f:
-        for mp in mps_with_no_posts:
-            f.write(f"{mp}\n")
+    #mps_with_posts = set(original_df["mp_handle"])
+    #mps_with_no_posts = set(mp_details[f"{args.platform}_handle"]) - mps_with_posts
+    #rep_logger.info(f"MPs with no posts during the period of analysis: {mps_with_no_posts}")
+    #with open(f"mps_with_no_posts_{args.platform}.txt", "w") as f:
+    #    for mp in mps_with_no_posts:
+    #        f.write(f"{mp}\n")
 
+    ## Remove duplicates for analysis 
     original_df = original_df[original_df["duplicates"].isin(["first duplicate", "no duplicates"])]
 
     # Analyse by post type (excluding duplicates)
     post_counts = mp_post_analysis(original_df)
+    print(f"Post counts by MP: {post_counts.head()}")
 
     # Filtering to only public replies to MPs 
     original_df = original_df[(original_df["item_type"] == "reply-1") | (original_df["item_type"] == "reply-2")]
     original_df = original_df[original_df["author_type"] == "by_public"]
 
-    ## Proportion of replies before deduplication:
-    #proportion_replies_by_gender(original_df)
+    ## MPs with posts but no replies:
+    #mps_with_posts = set(post_counts["mp_handle"])
+    #mps_with_replies = set(original_df["mp_handle"])
+    #mps_with_posts_but_no_replies = mps_with_posts - mps_with_replies
+    #rep_logger.info(f"MPs with posts but no replies: {mps_with_posts_but_no_replies}")
+
+    reply_counts = mp_reply_analysis(original_df)
+    print(f"Reply counts by MP: {reply_counts.head()}")
 
     ## Proportion of replies after deduplication:
     #proportion_replies_by_gender(original_df)
 
-
-    ## MPs with posts but no replies:
-    mps_with_posts = set(post_counts["mp_handle"])
-    mps_with_replies = set(original_df["mp_handle"])
-    mps_with_posts_but_no_replies = mps_with_posts - mps_with_replies
-    rep_logger.info(f"MPs with posts but no replies: {mps_with_posts_but_no_replies}")
-
-    reply_counts = mp_reply_analysis(original_df)
-
-    print(mp_details.columns)
 
     mp_details = mp_details[["parliament_name",
     f"{args.platform}_handle", "gender", "minority_status", "ethnicity", "wiki_birth_year"]]
@@ -700,30 +757,38 @@ def main(args):
 
     print("MP details after merging with reply and post counts: ", mp_details.head())
 
+    mp_details["reply_to_post_ratio"] = mp_details["reply_count"] / mp_details["post_count"].replace(0, np.nan)
+
+    ## Reply to post ratio by gender
+    print(mp_details.groupby("gender")["reply_to_post_ratio"].describe())
+
     ## plot as histogram
     #plot_reply_distribution(reply_counts)
+
+    #mannwhitney_by_group(mp_details, label="reply_count", group_by="gender")
+    #mannwhitney_by_group(mp_details, label="reply_to_post_ratio", group_by="gender")
 
 
     active_df, active_mp_details = select_active_mps(mp_details, original_df, reply_counts)
     print(f"Length of active_df: {len(active_df)}, Length of active_mp_details: {len(active_mp_details)}")
 
-    print(f"Number of replies which are NaN: {active_df['pure_text'].isna().sum()}")
-    print(f"Number of replies which are empty strings: {(active_df['pure_text'] == '').sum()}")
+    print(f"Number of replies which are NaN: {active_df['cleaned_text'].isna().sum()}")
+    print(f"Number of replies which are empty strings: {(active_df['cleaned_text'] == '').sum()}")
+    print(f"Number of items with missing cleaned_text in active_df: {active_df['cleaned_text'].isna().sum()}")
+
+    #proportion_replies_by_gender(active_df)
+
 
     #mannwhitney_by_group(active_mp_details, label="reply_count", group_by="gender")
     #mannwhitney_by_group(active_mp_details, label="reply_to_post_ratio", group_by="gender")
 
     ## Incorporate appearance related labels into active_df and active_mp_details
-    appearance_df = pd.read_csv("bluesky_replies_jan-jun_for_analysis.csv")
-    assert len(appearance_df) == len(active_df), "The length of appearance_df does not match the length of active df for analysis. Please check the data."
-
-    active_df = active_df.merge(appearance_df[["item_id", "pred_contains_appearance"]], on="item_id", how="left")
+    active_df = load_appearance_labels(active_df)
 
     #dataset_summary(active_df)
 
-    #proportion_replies_by_gender(active_df)
-
     #proportion_target_replies_by_gender(active_df, label="pred_binary")
+    #proportion_target_replies_by_gender(active_df, label="pred_contains_appearance")
 
     gbv_count = active_df.groupby("mp_handle")["pred_binary"].sum().reset_index()
     appearance_count = active_df.groupby("mp_handle")["pred_contains_appearance"].sum().reset_index()
@@ -736,9 +801,13 @@ def main(args):
     active_mp_details["percentage_appearance_replies"] = active_mp_details["pred_contains_appearance"] / active_mp_details["reply_count"] * 100
     active_mp_details["percentage_gbv_replies"] = active_mp_details["pred_binary"] / active_mp_details["reply_count"] * 100
 
+    print(f"Mean percentage of appearance related replies by gender:")
+    print(active_mp_details.groupby("gender")["percentage_appearance_replies"].mean())
+    print(f"Mean percentage of GBV related replies by gender:")
+    print(active_mp_details.groupby("gender")["percentage_gbv_replies"].mean()) 
 
-    assert active_mp_details["percentage_appearance_replies"].isna().sum() == 0, "There are MPs in active_reply_counts with no percentage of appearance related replies."
-    assert active_mp_details["percentage_gbv_replies"].isna().sum() == 0, "There are MPs in active_reply_counts with no percentage of GBV related replies."
+    assert active_mp_details["percentage_appearance_replies"].isna().sum() == 0, "There are MPs in active_reply_counts with NaN percentage of appearance related replies."
+    assert active_mp_details["percentage_gbv_replies"].isna().sum() == 0, "There are MPs in active_reply_counts with NaN percentage of GBV related replies."
 
 
     #mannwhitney_by_group(active_mp_details, label="percentage_appearance_replies", group_by="gender")
@@ -752,17 +821,20 @@ def main(args):
     #appearance_by_race_and_gender(active_df, active_mp_details, label="pred_binary")
 
     active_df, active_mp_details = handle_age_data(active_df, active_mp_details)
+    #appearance_by_age_and_gender(active_df, active_mp_details, label="percentage_appearance_replies")
+    #appearance_by_age_and_gender(active_df, active_mp_details, label="percentage_gbv_replies")
 
-    exit()
+    print("Percentage of GBV related replies per MP by ethnicity and gender:")
+    print(active_mp_details.groupby(["gender", "minority_status"])["percentage_gbv_replies"].mean())
+    print("Total percentage of GBV related replies by ethnicity and gender:")
+    print(active_df.groupby(["gender", "minority_status"])["pred_binary"].mean())
 
-    active_df, active_mp_details = appearance_by_age_and_gender(active_df, active_mp_details, label="percentage_appearance_replies")
-    active_df, active_mp_details = appearance_by_age_and_gender(active_df, active_mp_details, label="percentage_gbv_replies")
+    active_df, gbv_subtypes = one_hot_gbv_category_labels(active_df)
+    analyse_gbv_subcategories(active_df, gbv_subtypes)
+    analyse_gbv_subcategories(active_df, gbv_subtypes, only=True)
+    analyse_gbv_subcategories(active_df, gbv_subtypes, only=True, comparison="minority_status")
+    analyse_gbv_subcategories(active_df, gbv_subtypes, only=True, comparison="age_group")
 
-
-    exit()
-
-
-    gbv_analysis(active_df, active_mp_details)
 
     return active_df, active_mp_details
 
