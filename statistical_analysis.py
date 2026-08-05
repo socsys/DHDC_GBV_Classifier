@@ -39,6 +39,139 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 matplotlib.rc({'font.size': 14})
 plt.rcParams.update({'font.size': 14})
 
+class BubbleChart:
+    ''' Class definition taken from https://matplotlib.org/stable/gallery/misc/packed_bubbles.html ''' 
+    def __init__(self, area, bubble_spacing=0):
+        """
+        Setup for bubble collapse.
+
+        Parameters
+        ----------
+        area : array-like
+            Area of the bubbles.
+        bubble_spacing : float, default: 0
+            Minimal spacing between bubbles after collapsing.
+
+        Notes
+        -----
+        If "area" is sorted, the results might look weird.
+        """
+        area = np.asarray(area)
+        r = np.sqrt(area / np.pi)
+
+        self.bubble_spacing = bubble_spacing
+        self.bubbles = np.ones((len(area), 4))
+        self.bubbles[:, 2] = r
+        self.bubbles[:, 3] = area
+        self.maxstep = 2 * self.bubbles[:, 2].max() + self.bubble_spacing
+        self.step_dist = self.maxstep / 2
+
+        # calculate initial grid layout for bubbles
+        length = np.ceil(np.sqrt(len(self.bubbles)))
+        grid = np.arange(length) * self.maxstep
+        gx, gy = np.meshgrid(grid, grid)
+        self.bubbles[:, 0] = gx.flatten()[:len(self.bubbles)]
+        self.bubbles[:, 1] = gy.flatten()[:len(self.bubbles)]
+
+        self.com = self.center_of_mass()
+
+    def center_of_mass(self):
+        return np.average(
+            self.bubbles[:, :2], axis=0, weights=self.bubbles[:, 3]
+        )
+
+    def center_distance(self, bubble, bubbles):
+        return np.hypot(bubble[0] - bubbles[:, 0],
+                        bubble[1] - bubbles[:, 1])
+
+    def outline_distance(self, bubble, bubbles):
+        center_distance = self.center_distance(bubble, bubbles)
+        return center_distance - bubble[2] - \
+            bubbles[:, 2] - self.bubble_spacing
+
+    def check_collisions(self, bubble, bubbles):
+        distance = self.outline_distance(bubble, bubbles)
+        return len(distance[distance < 0])
+
+    def collides_with(self, bubble, bubbles):
+        distance = self.outline_distance(bubble, bubbles)
+        return np.argmin(distance, keepdims=True)
+
+    def collapse(self, n_iterations=50):
+        """
+        Move bubbles to the center of mass.
+
+        Parameters
+        ----------
+        n_iterations : int, default: 50
+            Number of moves to perform.
+        """
+        for _i in range(n_iterations):
+            moves = 0
+            for i in range(len(self.bubbles)):
+                rest_bub = np.delete(self.bubbles, i, 0)
+                # try to move directly towards the center of mass
+                # direction vector from bubble to the center of mass
+                dir_vec = self.com - self.bubbles[i, :2]
+
+                # shorten direction vector to have length of 1
+                dir_vec = dir_vec / np.sqrt(dir_vec.dot(dir_vec))
+
+                # calculate new bubble position
+                new_point = self.bubbles[i, :2] + dir_vec * self.step_dist
+                new_bubble = np.append(new_point, self.bubbles[i, 2:4])
+
+                # check whether new bubble collides with other bubbles
+                if not self.check_collisions(new_bubble, rest_bub):
+                    self.bubbles[i, :] = new_bubble
+                    self.com = self.center_of_mass()
+                    moves += 1
+                else:
+                    # try to move around a bubble that you collide with
+                    # find colliding bubble
+                    for colliding in self.collides_with(new_bubble, rest_bub):
+                        # calculate direction vector
+                        dir_vec = rest_bub[colliding, :2] - self.bubbles[i, :2]
+                        dir_vec = dir_vec / np.sqrt(dir_vec.dot(dir_vec))
+                        # calculate orthogonal vector
+                        orth = np.array([dir_vec[1], -dir_vec[0]])
+                        # test which direction to go
+                        new_point1 = (self.bubbles[i, :2] + orth *
+                                      self.step_dist)
+                        new_point2 = (self.bubbles[i, :2] - orth *
+                                      self.step_dist)
+                        dist1 = self.center_distance(
+                            self.com, np.array([new_point1]))
+                        dist2 = self.center_distance(
+                            self.com, np.array([new_point2]))
+                        new_point = new_point1 if dist1 < dist2 else new_point2
+                        new_bubble = np.append(new_point, self.bubbles[i, 2:4])
+                        if not self.check_collisions(new_bubble, rest_bub):
+                            self.bubbles[i, :] = new_bubble
+                            self.com = self.center_of_mass()
+
+            if moves / len(self.bubbles) < 0.1:
+                self.step_dist = self.step_dist / 2
+
+    def plot(self, ax, labels, colors):
+        """
+        Draw the bubble plot.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes
+        labels : list
+            Labels of the bubbles.
+        colors : list
+            Colors of the bubbles.
+        """
+        for i in range(len(self.bubbles)):
+            circ = plt.Circle(
+                self.bubbles[i, :2], self.bubbles[i, 2], color=colors[i])
+            ax.add_patch(circ)
+            ax.text(*self.bubbles[i, :2], labels[i],
+                    horizontalalignment='center', verticalalignment='center')
+
 def load_and_merge_data(platform="bluesky", new=False):
     ''' Function to load and merge default labelled data and raw data, and save merged data as csv for future use to avoid having to merge every time. If merged csv already exists, load that instead.'''
 
@@ -593,10 +726,12 @@ def analyse_gbv_subcategories(active_df, gbv_subcategories, only=False, comparis
         b_df = active_df[active_df["minority_status"] == "Unknown"]
     elif comparison == "age_group":
         active_df = active_df[active_df["gender"] == "Female"] # Filter out male MPs
-        a = ["24-34", "35-44"]
-        b = ["45-54", "55-64", "65+"]
-        a_df = active_df[active_df["age_group"].isin(a)]
-        b_df = active_df[active_df["age_group"].isin(b)]
+        a = "24-44"
+        b = "45+"
+        a_ages = ["24-34", "35-44"]
+        b_ages = ["45-54", "55-64", "65+"]
+        a_df = active_df[active_df["age_group"].isin(a_ages)]
+        b_df = active_df[active_df["age_group"].isin(b_ages)]
 
     print(f"Percentage of GBV related replies by {comparison}:")
     print(a_df["pred_binary"].sum() / len(a_df) * 100)
@@ -608,7 +743,7 @@ def analyse_gbv_subcategories(active_df, gbv_subcategories, only=False, comparis
         b_df = b_df[b_df["pred_binary"] == 1] # Filter out replies which are not GBV related
         print(f"Number of GBV related replies: {len(b_df)}")
 
-    percentages_df = pd.DataFrame(columns=["subcategory", f"{a}_count", f"{a}_percentage", f"{b}_count", f"{b}_percentage"])
+    percentages_df = pd.DataFrame(columns=["subcategory", f"{a}_count", f"{a}", f"{b}_count", f"{b}"])
 
     # Proportion of each GBV subcategory by gender
     for subcategory in gbv_subcategories:
@@ -617,7 +752,7 @@ def analyse_gbv_subcategories(active_df, gbv_subcategories, only=False, comparis
         subcategory_count = a_df[subcategory].sum()
         proportion = subcategory_count / len(a_df) * 100
         print(f"{subcategory}: {subcategory_count} ({proportion:.2f}%)")
-        percentages_df = pd.concat([percentages_df, pd.DataFrame({"subcategory": [subcategory], f"{a}_count": [subcategory_count], f"{a}_percentage": [proportion]})], ignore_index=True)
+        percentages_df = pd.concat([percentages_df, pd.DataFrame({"subcategory": [subcategory], f"{a}_count": [subcategory_count], f"{a}": [proportion]})], ignore_index=True)
 
     for subcategory in gbv_subcategories:
         if subcategory in ["-", "MISOGYNY-NON-SEXUAL-VIOLENCE"]:
@@ -626,12 +761,53 @@ def analyse_gbv_subcategories(active_df, gbv_subcategories, only=False, comparis
         proportion = subcategory_count / len(b_df) * 100
         print(f"{subcategory}: {subcategory_count} ({proportion:.2f}%)")
         percentages_df.loc[percentages_df["subcategory"] == subcategory, f"{b}_count"] = subcategory_count
-        percentages_df.loc[percentages_df["subcategory"] == subcategory, f"{b}_percentage"] = proportion
+        percentages_df.loc[percentages_df["subcategory"] == subcategory, f"{b}"] = proportion
 
     relevant_subcategories = gbv_subcategories[gbv_subcategories != "-"]
     relevant_subcategories = relevant_subcategories[relevant_subcategories != "MISOGYNY-NON-SEXUAL-VIOLENCE"]
 
     print(percentages_df)
+
+
+    # create bar chart of proportion of each GBV subcategory by gender
+    plt.figure(figsize=(12, 8))
+    percentages_dfm = percentages_df.melt(id_vars="subcategory", value_vars=[f"{a}", f"{b}"], var_name="Demographic", value_name="percentage")
+    print(percentages_dfm)
+    #percentages_df = percentages_df.sort_values(by=f"{a}_percentage", ascending=False)
+    sns.barplot(x="subcategory", y="percentage", hue="Demographic", data=percentages_dfm, palette={f"{a}": "lightblue", f"{b}": "blue"})
+    plt.title(f"Proportion of GBV Related Replies Belonging to Each Subcategory by {comparison.title()}")
+    plt.ylabel("Proportion of GBV Related Replies (%)")
+    plt.xlabel("GBV Subcategory")
+    plt.xticks(rotation=45) 
+    plt.savefig(f"bar_gbv_subcategories_by_{comparison}_{only}.png")
+    plt.show()
+
+    # bubble chart of proportion of each GBV subcategory by gender
+    bubble_chart = BubbleChart(area=np.array(percentages_df[f"{a}_count"], dtype='float'), bubble_spacing=0.1)
+    bubble_chart.collapse()
+    fig, ax = plt.subplots(figsize=(12,12),subplot_kw=dict(aspect="equal"))
+    bubble_chart.plot(ax, percentages_df["subcategory"], ["blue", "lightblue", "green", "pink"])
+    ax.axis("off")
+    ax.relim()
+    ax.autoscale_view()
+    ax.set_title(f"Proportion of GBV Related Replies Belonging to Each Subcategory by {comparison.title()}")
+    plt.savefig(f"bubble_gbv_subcategories_by_{comparison}_{only}.png")
+
+    # population pyramid of proportion of each GBV subcategory by gender
+    reformat_df = pd.DataFrame({"Category": percentages_df["subcategory"], f"{a}": percentages_df[f"{a}"], f"{b}": percentages_df[f"{b}"]})
+    reformat_df[f"{a}_Left"] = 0
+    reformat_df[f"{a}_width"] = reformat_df[f"{a}"]
+    reformat_df[f"{b}_Left"] = - reformat_df[f"{b}"]
+    reformat_df[f"{b}_width"] = reformat_df[f"{b}"]
+    print(reformat_df)
+    fig = plt.figure(figsize=(12, 8))
+    plt.barh(y=reformat_df["Category"], width=reformat_df[f"{a}_width"], color="lightblue", label=f"{a}")
+    plt.barh(y=reformat_df["Category"], width=reformat_df[f"{b}_width"], left=reformat_df[f"{b}_Left"], color="blue", label=f"{b}")
+    plt.title(f"Percentage of GBV Related Replies Belonging to Each Subcategory by {comparison.title()}")
+    plt.xlabel("Percentage of GBV Related Replies")
+    plt.ylabel("GBV Subcategory")
+    plt.legend()
+    plt.savefig(f"population_pyramid_gbv_subcategories_by_{comparison}_{only}.png")
 
 
 def select_active_mps(mp_details, original_df, reply_counts):
