@@ -1,9 +1,1 @@
 Loaded data for platform: bluesky
-MP details after merging:   parliament_name               bluesky_handle  ...             mp_handle_y post_count
-0    Diane Abbott    hackneyabbott.bsky.social  ...                     NaN        NaN
-1    Angela Eagle     angelaeagle1.bsky.social  ...                     NaN        NaN
-2   Yvette Cooper  yvettecooper-mp.bsky.social  ...                     NaN        NaN
-3     Mary Creagh       marycreagh.bsky.social  ...  marycreagh.bsky.social       97.0
-4  Kerry Mccarthy          kerrymp.bsky.social  ...                     NaN        NaN
-
-[5 rows x 10 columns]

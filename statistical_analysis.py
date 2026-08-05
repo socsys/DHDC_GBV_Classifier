@@ -215,6 +215,25 @@ def load_mp_details_and_merge(original_df):
     print(f"Number of MPs with bluesky_handle in mp_details: {mp_details['bluesky_handle'].nunique()}")
     return original_df, mp_details
 
+def plot_account_status(mp_details, platform="bluesky"):
+    ''' Function to plot the distribution of account status by gender and age '''
+    print("======== ACCOUNT STATUS DISTRIBUTION ========")
+    plt.figure(figsize=(10, 8))
+    mp_details[f"has_{platform}"] = mp_details[f"{platform}_handle"].notna()
+    mp_details["age"] = 2026 - pd.to_numeric(mp_details["wiki_birth_year"], errors="coerce")
+    sns.histplot(data=mp_details, x="age", hue=f"has_{platform}", multiple="layer", palette={True: "blue", False: "red"}, bins=15, edgecolor="none", alpha=0.4)
+    plt.title("Bluesky Account Presence Distribution by Age")
+    plt.xlabel("Age")
+    plt.ylabel("Number of MPs")
+    plt.savefig("account_status_distribution_by_age.png")
+
+    plt.figure(figsize=(8, 8))
+    sns.histplot(data=mp_details, hue=f"has_{platform}", x="gender", palette={True: "blue", False: "red"}, multiple="stack", alpha=0.4)
+    plt.title("Bluesky Account Presence by Gender")
+    plt.xlabel("Gender")
+    plt.ylabel("Number of MPs")
+    plt.savefig("account_status_distribution_by_gender.png")
+
 def mp_post_analysis(original_df):
     ''' Function which analyzes posts by MPs, including number of posts, number of MPs with posts, and number of posts by gender and duplicate status. Returns a dataframe with the number of posts by each MP. '''
     print("======== MP POST ANALYSIS ========")
@@ -763,35 +782,10 @@ def analyse_gbv_subcategories(active_df, gbv_subcategories, only=False, comparis
         percentages_df.loc[percentages_df["subcategory"] == subcategory, f"{b}_count"] = subcategory_count
         percentages_df.loc[percentages_df["subcategory"] == subcategory, f"{b}"] = proportion
 
-    relevant_subcategories = gbv_subcategories[gbv_subcategories != "-"]
-    relevant_subcategories = relevant_subcategories[relevant_subcategories != "MISOGYNY-NON-SEXUAL-VIOLENCE"]
+    label_mp = {"OBJECTIFICATION": "Objectification", "SEXUAL-VIOLENCE": "Sexual Violence", "IDEOLOGICAL-INEQUALITY": "Ideological", "STEREOTYPING-DOMINANCE": "Stereotyping"}
+    percentages_df["subcategory"] = percentages_df["subcategory"].replace(label_mp)
 
     print(percentages_df)
-
-
-    # create bar chart of proportion of each GBV subcategory by gender
-    plt.figure(figsize=(12, 8))
-    percentages_dfm = percentages_df.melt(id_vars="subcategory", value_vars=[f"{a}", f"{b}"], var_name="Demographic", value_name="percentage")
-    print(percentages_dfm)
-    #percentages_df = percentages_df.sort_values(by=f"{a}_percentage", ascending=False)
-    sns.barplot(x="subcategory", y="percentage", hue="Demographic", data=percentages_dfm, palette={f"{a}": "lightblue", f"{b}": "blue"})
-    plt.title(f"Proportion of GBV Related Replies Belonging to Each Subcategory by {comparison.title()}")
-    plt.ylabel("Proportion of GBV Related Replies (%)")
-    plt.xlabel("GBV Subcategory")
-    plt.xticks(rotation=45) 
-    plt.savefig(f"bar_gbv_subcategories_by_{comparison}_{only}.png")
-    plt.show()
-
-    # bubble chart of proportion of each GBV subcategory by gender
-    bubble_chart = BubbleChart(area=np.array(percentages_df[f"{a}_count"], dtype='float'), bubble_spacing=0.1)
-    bubble_chart.collapse()
-    fig, ax = plt.subplots(figsize=(12,12),subplot_kw=dict(aspect="equal"))
-    bubble_chart.plot(ax, percentages_df["subcategory"], ["blue", "lightblue", "green", "pink"])
-    ax.axis("off")
-    ax.relim()
-    ax.autoscale_view()
-    ax.set_title(f"Proportion of GBV Related Replies Belonging to Each Subcategory by {comparison.title()}")
-    plt.savefig(f"bubble_gbv_subcategories_by_{comparison}_{only}.png")
 
     # population pyramid of proportion of each GBV subcategory by gender
     reformat_df = pd.DataFrame({"Category": percentages_df["subcategory"], f"{a}": percentages_df[f"{a}"], f"{b}": percentages_df[f"{b}"]})
@@ -800,12 +794,23 @@ def analyse_gbv_subcategories(active_df, gbv_subcategories, only=False, comparis
     reformat_df[f"{b}_Left"] = - reformat_df[f"{b}"]
     reformat_df[f"{b}_width"] = reformat_df[f"{b}"]
     print(reformat_df)
-    fig = plt.figure(figsize=(12, 8))
-    plt.barh(y=reformat_df["Category"], width=reformat_df[f"{a}_width"], color="lightblue", label=f"{a}")
-    plt.barh(y=reformat_df["Category"], width=reformat_df[f"{b}_width"], left=reformat_df[f"{b}_Left"], color="blue", label=f"{b}")
-    plt.title(f"Percentage of GBV Related Replies Belonging to Each Subcategory by {comparison.title()}")
-    plt.xlabel("Percentage of GBV Related Replies")
+    fig = plt.figure(figsize=(16, 5))
+    if comparison == "gender":
+        color_a = "lightblue"
+        color_b = "blue"
+    else:
+        color_a = "lightgreen"
+        color_b = "green"
+    plt.barh(y=reformat_df["Category"], width=reformat_df[f"{a}_width"], color=color_a, label=f"{a}")
+    plt.barh(y=reformat_df["Category"], width=reformat_df[f"{b}_width"], left=reformat_df[f"{b}_Left"], color=color_b, label=f"{b}")
+    plt.title(f"Percentage of Replies Belonging to Each GBV Subcategory by {comparison.title()}")
+    plt.xlabel("Percentage of Replies (%)")
     plt.ylabel("GBV Subcategory")
+    limits = (int((round(reformat_df[f"{b}_Left"].min())-1)), int((round(reformat_df[f"{a}_width"].max())+1)))
+    print(f"X-axis limits: {limits}")
+    plt.xlim(limits)
+    plt.xticks(range(limits[0], limits[1]), [f"{abs(i)} %" for i in range(limits[0], limits[1])])
+
     plt.legend()
     plt.savefig(f"population_pyramid_gbv_subcategories_by_{comparison}_{only}.png")
 
@@ -886,6 +891,10 @@ def main(args):
 
     ## Load MP details and merge with original_df
     original_df, mp_details = load_mp_details_and_merge(original_df)
+
+    plot_account_status(mp_details)
+
+    exit()
     
     ## Export list of MPs who have bluesky account but did not post during the period of analysis
     #mps_with_posts = set(original_df["mp_handle"])
@@ -1007,9 +1016,8 @@ def main(args):
 
     active_df, gbv_subtypes = one_hot_gbv_category_labels(active_df)
     analyse_gbv_subcategories(active_df, gbv_subtypes)
-    analyse_gbv_subcategories(active_df, gbv_subtypes, only=True)
-    analyse_gbv_subcategories(active_df, gbv_subtypes, only=True, comparison="minority_status")
-    analyse_gbv_subcategories(active_df, gbv_subtypes, only=True, comparison="age_group")
+    analyse_gbv_subcategories(active_df, gbv_subtypes, only=False, comparison="minority_status")
+    analyse_gbv_subcategories(active_df, gbv_subtypes, only=False, comparison="age_group")
 
 
     return active_df, active_mp_details
