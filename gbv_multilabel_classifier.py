@@ -744,6 +744,7 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda"):
         all_records: List[Dict[str, Any]] = []
 
     local_records: List[Dict[str, Any]] = []
+
     with torch.no_grad():
         for step, batch in tqdm(enumerate(inf_data_loader), total=len(inf_data_loader), desc="Inference"):
             if resume == True and step < resume_step:
@@ -1063,13 +1064,22 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
 
 
     if args.inf:
-        inf_data = pd.read_csv(args.inf_data_path)
+        inf_data = pd.read_csv(args.inf_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str})
+        print(f"Length of inference dataset: {len(inf_data)}")
         data_id_col = "comment_id" if "comment_id" in inf_data.columns else "item_id" if "item_id" in inf_data.columns else "data_id" # Update to match inf dataset labeling 
         inf_data.rename(columns={"cleaned_text": "text"}, inplace=True) if "cleaned_text" in inf_data.columns else None 
-        inf_data = inf_data[["text", data_id_col]]
+        inf_data = inf_data[[data_id_col, "text"]]
         inf_data.rename(columns={data_id_col: "data_id"}, inplace=True)
+        ## For testing
+        #inf_data = inf_data.sample(n=1000, random_state=42).reset_index(drop=True) 
         predictions = inference(model, tokenizer, inf_data, resume=args.resume_inf)
         predictions = pd.DataFrame(predictions, columns=["data_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
+        print(f"Length of predictions: {len(predictions)}")
+
+        assert any(predictions["pred_binary"] == 99) == False, "Found predictions with binary label 99, which should not occur."
+        assert any(predictions["pred_category"] == 99) == False, "Found predictions with category label 99, which should not occur."
+        assert len(predictions) <= len(inf_data), "Number of predictions exceeds number of input data points."
+
         labelled_texts = pd.merge(inf_data, pd.DataFrame(predictions), on="data_id")
         print(labelled_texts.head())
 

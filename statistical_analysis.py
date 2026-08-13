@@ -26,6 +26,8 @@ from collections import Counter
 
 import statsmodels.formula.api as smf
 import seaborn as sns
+import time 
+from datetime import datetime
 
 
 
@@ -39,165 +41,70 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 matplotlib.rc({'font.size': 14})
 plt.rcParams.update({'font.size': 14})
 
-class BubbleChart:
-    ''' Class definition taken from https://matplotlib.org/stable/gallery/misc/packed_bubbles.html ''' 
-    def __init__(self, area, bubble_spacing=0):
-        """
-        Setup for bubble collapse.
+def get_col_name(df):
+    columns = df.columns.tolist()
+    col_id = "data_id" if "data_id" in columns else "item_id" if "item_id" in columns else "comment_id" if "comment_id" in columns else None
+    return col_id
 
-        Parameters
-        ----------
-        area : array-like
-            Area of the bubbles.
-        bubble_spacing : float, default: 0
-            Minimal spacing between bubbles after collapsing.
-
-        Notes
-        -----
-        If "area" is sorted, the results might look weird.
-        """
-        area = np.asarray(area)
-        r = np.sqrt(area / np.pi)
-
-        self.bubble_spacing = bubble_spacing
-        self.bubbles = np.ones((len(area), 4))
-        self.bubbles[:, 2] = r
-        self.bubbles[:, 3] = area
-        self.maxstep = 2 * self.bubbles[:, 2].max() + self.bubble_spacing
-        self.step_dist = self.maxstep / 2
-
-        # calculate initial grid layout for bubbles
-        length = np.ceil(np.sqrt(len(self.bubbles)))
-        grid = np.arange(length) * self.maxstep
-        gx, gy = np.meshgrid(grid, grid)
-        self.bubbles[:, 0] = gx.flatten()[:len(self.bubbles)]
-        self.bubbles[:, 1] = gy.flatten()[:len(self.bubbles)]
-
-        self.com = self.center_of_mass()
-
-    def center_of_mass(self):
-        return np.average(
-            self.bubbles[:, :2], axis=0, weights=self.bubbles[:, 3]
-        )
-
-    def center_distance(self, bubble, bubbles):
-        return np.hypot(bubble[0] - bubbles[:, 0],
-                        bubble[1] - bubbles[:, 1])
-
-    def outline_distance(self, bubble, bubbles):
-        center_distance = self.center_distance(bubble, bubbles)
-        return center_distance - bubble[2] - \
-            bubbles[:, 2] - self.bubble_spacing
-
-    def check_collisions(self, bubble, bubbles):
-        distance = self.outline_distance(bubble, bubbles)
-        return len(distance[distance < 0])
-
-    def collides_with(self, bubble, bubbles):
-        distance = self.outline_distance(bubble, bubbles)
-        return np.argmin(distance, keepdims=True)
-
-    def collapse(self, n_iterations=50):
-        """
-        Move bubbles to the center of mass.
-
-        Parameters
-        ----------
-        n_iterations : int, default: 50
-            Number of moves to perform.
-        """
-        for _i in range(n_iterations):
-            moves = 0
-            for i in range(len(self.bubbles)):
-                rest_bub = np.delete(self.bubbles, i, 0)
-                # try to move directly towards the center of mass
-                # direction vector from bubble to the center of mass
-                dir_vec = self.com - self.bubbles[i, :2]
-
-                # shorten direction vector to have length of 1
-                dir_vec = dir_vec / np.sqrt(dir_vec.dot(dir_vec))
-
-                # calculate new bubble position
-                new_point = self.bubbles[i, :2] + dir_vec * self.step_dist
-                new_bubble = np.append(new_point, self.bubbles[i, 2:4])
-
-                # check whether new bubble collides with other bubbles
-                if not self.check_collisions(new_bubble, rest_bub):
-                    self.bubbles[i, :] = new_bubble
-                    self.com = self.center_of_mass()
-                    moves += 1
-                else:
-                    # try to move around a bubble that you collide with
-                    # find colliding bubble
-                    for colliding in self.collides_with(new_bubble, rest_bub):
-                        # calculate direction vector
-                        dir_vec = rest_bub[colliding, :2] - self.bubbles[i, :2]
-                        dir_vec = dir_vec / np.sqrt(dir_vec.dot(dir_vec))
-                        # calculate orthogonal vector
-                        orth = np.array([dir_vec[1], -dir_vec[0]])
-                        # test which direction to go
-                        new_point1 = (self.bubbles[i, :2] + orth *
-                                      self.step_dist)
-                        new_point2 = (self.bubbles[i, :2] - orth *
-                                      self.step_dist)
-                        dist1 = self.center_distance(
-                            self.com, np.array([new_point1]))
-                        dist2 = self.center_distance(
-                            self.com, np.array([new_point2]))
-                        new_point = new_point1 if dist1 < dist2 else new_point2
-                        new_bubble = np.append(new_point, self.bubbles[i, 2:4])
-                        if not self.check_collisions(new_bubble, rest_bub):
-                            self.bubbles[i, :] = new_bubble
-                            self.com = self.center_of_mass()
-
-            if moves / len(self.bubbles) < 0.1:
-                self.step_dist = self.step_dist / 2
-
-    def plot(self, ax, labels, colors):
-        """
-        Draw the bubble plot.
-
-        Parameters
-        ----------
-        ax : matplotlib.axes.Axes
-        labels : list
-            Labels of the bubbles.
-        colors : list
-            Colors of the bubbles.
-        """
-        for i in range(len(self.bubbles)):
-            circ = plt.Circle(
-                self.bubbles[i, :2], self.bubbles[i, 2], color=colors[i])
-            ax.add_patch(circ)
-            ax.text(*self.bubbles[i, :2], labels[i],
-                    horizontalalignment='center', verticalalignment='center')
-
-def load_and_merge_data(platform="bluesky", new=False):
+def load_and_merge_data(platform="bluesky", new=False, main_df_path=None, labelled_df_path=None):
     ''' Function to load and merge default labelled data and raw data, and save merged data as csv for future use to avoid having to merge every time. If merged csv already exists, load that instead.'''
 
-    if platform == "bluesky":
-        if new==True:
-            raw_df = pd.read_csv("bluesky_posts_currentMPs_Jun_cleaned.csv")
-            labelled_df = pd.read_csv("bluesky_posts_currentMPs_Jun_cleaned_predictions.csv")
-            print(f"Length of raw_df: {len(raw_df)}")
-            print(f"Length of labelled_df: {len(labelled_df)}")
-            original_df = raw_df.merge(labelled_df[["data_id","pred_binary", "pred_category_pipe"]], left_on="item_id", right_on="data_id", how="left")
-
-            print(len(original_df))
-            print(f"Number of items with missing data_id in original_df: {original_df['data_id'].isna().sum()}")
-
-            original_df["created_at"] = original_df["created_at"].apply(lambda x: pd.to_datetime(x, errors='coerce')) # Force created_at to be datetime, coercing errors to NaT
-
-            original_df.to_csv("bluesky_posts_currentMPs_Jun_full.csv", index=False)
-
+    if new == False:
+        ## Check if merged csv already exists
+        if os.path.exists(f"{platform}_combined.csv"):
+            start = time.time()
+            merged_df = pd.read_csv(f"{platform}_combined.csv", dtype={"comment_id": str, "item_id": str, "data_id": str}, parse_dates=["created_at"])
+            print(f"Loaded merged csv in {time.time() - start} seconds")
         else:
-            original_df = pd.read_csv("bluesky_posts_currentMPs_Jun_full.csv")
-    elif platform == "twitter":
-        pass # To Do: Implement for X/Twitter
-    else:
-        raise ValueError("Platform not supported. Please choose 'bluesky' or 'twitter'.")
-    
-    return original_df
+            print("Merged csv does not exist. Loading and merging data...")
+            new = True
+
+    if new == True:
+        if platform == "bluesky":
+            if not main_df_path:
+                main_df_path = "bluesky_posts_currentMPs_Jun_cleaned.csv"
+            if not labelled_df_path:
+                labelled_df_path = "bluesky_posts_currentMPs_Jun_cleaned_predictions.csv"
+            
+        elif platform == "twitter":
+            if not main_df_path:
+                main_df_path = "twitter_posts_currentMPs_2026-01-01_to_2026-06-30_cleaned.csv"
+            if not labelled_df_path:
+                labelled_df_path = "twitter_posts_currentMPs_2026-01-01_to_2026-06-30_cleaned_predictions.csv"
+        
+        raw_df = pd.read_csv(main_df_path, dtype={"data_id": str, "item_id": str, "comment_id": str})
+        labelled_df = pd.read_csv(labelled_df_path, dtype={"data_id": str, "item_id": str, "comment_id": str})
+        print(f"Length of raw_df: {len(raw_df)}")
+        print(f"Length of labelled_df: {len(labelled_df)}")
+
+        ## deduplicate labelled_df based on id column
+        labelled_df_id_col = get_col_name(labelled_df)
+        labelled_df = labelled_df.drop_duplicates(subset=labelled_df_id_col)
+        labelled_df = labelled_df[labelled_df["text"].notna()]
+        labelled_df = labelled_df[labelled_df["text"].str.strip() != ""]
+        labelled_df = labelled_df[labelled_df["text"].str.lower() != "nan"]
+        print(f"Length of labelled_df after deduplication: {len(labelled_df)}")
+
+        ## remove empty rows from raw_df based on cleaned_text column
+        raw_df = raw_df[raw_df["cleaned_text"].notna()]
+        raw_df = raw_df[raw_df["cleaned_text"].str.strip() != ""]
+        raw_df = raw_df[raw_df["cleaned_text"].str.lower() != "nan"]
+        raw_df_id_col = get_col_name(raw_df)
+        raw_df = raw_df.drop_duplicates(subset=raw_df_id_col)
+        print(f"Length of raw_df after removing empty rows: {len(raw_df)}")
+        
+        merged_df = raw_df.merge(labelled_df[[labelled_df_id_col, "pred_binary", "pred_category_pipe"]], left_on=raw_df_id_col, right_on=labelled_df_id_col, how="left")
+
+        print(len(merged_df))
+        print(f"Number of items with missing {labelled_df_id_col} in merged_df: {merged_df[labelled_df_id_col].isna().sum()}")
+
+        start = time.time()
+        merged_df["created_at"] = merged_df["created_at"].apply(lambda x: pd.to_datetime(x, errors='coerce')) # Force created_at to be datetime, coercing errors to NaT
+        print(f"Time taken to convert created_at to datetime: {time.time() - start} seconds")
+
+        merged_df.to_csv(f"{platform}_combined.csv", index=False)
+
+    return merged_df 
 
 def dataset_summary(df):
     ''' Function to compute summary statistics for the dataset. '''
@@ -207,12 +114,16 @@ def dataset_summary(df):
     print(f"Number of MPs by gender: {df.groupby('gender')['mp_handle'].nunique()}")
     print(f"Number of unique authors: {df['author'].nunique()}")
 
-def load_mp_details_and_merge(original_df):
+def load_mp_details_and_merge(original_df, platform="bluesky"):
     print("======== LOADING MP DETAILS ========")
     mp_details = pd.read_csv("FINAL-mp-details.csv", dtype={"theyworkforyou_id": str, "parliament_id": str, "wiki_birth_year": str})
     mp_details = mp_details.replace("—", np.nan)
-    original_df = original_df.merge(mp_details[["bluesky_handle", "minority_status", "ethnicity", "party", "wiki_birth_year"]], left_on="mp_handle", right_on="bluesky_handle", how="left")
-    print(f"Number of MPs with bluesky_handle in mp_details: {mp_details['bluesky_handle'].nunique()}")
+    print(f"Number of MPs in mp_details: {len(mp_details)}")
+    print(f"Number of MPs in mp_details by gender: {mp_details.groupby('gender')['parliament_name'].nunique()}")
+    print(f"Number of MPs with {platform}_handle in mp_details: {mp_details[f'{platform}_handle'].nunique()}")
+    print(f"Number of MPs with {platform}_handle by gender: {mp_details.groupby('gender')[f'{platform}_handle'].nunique()}")
+    original_df = original_df.merge(mp_details[[f"{platform}_handle", "minority_status", "ethnicity", "party", "wiki_birth_year"]], left_on="mp_handle", right_on=f"{platform}_handle", how="left")
+
     return original_df, mp_details
 
 def plot_account_status(mp_details, platform="bluesky"):
@@ -222,17 +133,17 @@ def plot_account_status(mp_details, platform="bluesky"):
     mp_details[f"has_{platform}"] = mp_details[f"{platform}_handle"].notna()
     mp_details["age"] = 2026 - pd.to_numeric(mp_details["wiki_birth_year"], errors="coerce")
     sns.histplot(data=mp_details, x="age", hue=f"has_{platform}", multiple="layer", palette={True: "blue", False: "red"}, bins=15, edgecolor="none", alpha=0.4)
-    plt.title("Bluesky Account Presence Distribution by Age")
+    plt.title(f"{platform.capitalize()} Account Presence Distribution by Age")
     plt.xlabel("Age")
     plt.ylabel("Number of MPs")
-    plt.savefig("account_status_distribution_by_age.png")
+    plt.savefig(f"{platform}_account_status_distribution_by_age.png")
 
     plt.figure(figsize=(8, 8))
     sns.histplot(data=mp_details, hue=f"has_{platform}", x="gender", palette={True: "blue", False: "red"}, multiple="stack", alpha=0.4)
-    plt.title("Bluesky Account Presence by Gender")
+    plt.title(f"{platform.capitalize()} Account Presence by Gender")
     plt.xlabel("Gender")
     plt.ylabel("Number of MPs")
-    plt.savefig("account_status_distribution_by_gender.png")
+    plt.savefig(f"{platform}_account_status_distribution_by_gender.png")
 
 def mp_post_analysis(original_df):
     ''' Function which analyzes posts by MPs, including number of posts, number of MPs with posts, and number of posts by gender and duplicate status. Returns a dataframe with the number of posts by each MP. '''
@@ -278,15 +189,15 @@ def mp_reply_analysis(original_df):
 def plot_reply_distribution(reply_counts):
     ''' Function to plot the distribution of replies by MPs '''
     print(f"==== DISTRIBUTION OF REPLIES ========")
-    reply_counts = reply_counts[reply_counts["reply_count"] <= 10000] # Filter out MPs with more than 1000 replies for better visualization
+    #reply_counts = reply_counts[reply_counts["reply_count"] <= 10000] # Filter out MPs with more than 1000 replies for better visualization
     plt.figure(figsize=(10, 6))
     plt.hist(reply_counts["reply_count"], bins=200, color='blue', alpha=0.7)
-    plt.title("Distribution of Replies by MPs")
+    plt.title(f"Distribution of Replies by MPs for {args.platform.capitalize()}")
     plt.xlabel("Number of Replies")
     plt.ylabel("Number of MPs")
     plt.axvline(reply_counts["reply_count"].median(), color='red', linestyle='dashed', linewidth=1)
     plt.show()
-    plt.savefig("replies_distribution.png")
+    plt.savefig(f"{args.platform}_replies_distribution.png")
 
 
 def compare_demographics_by_engagement_level(reply_counts):
@@ -358,14 +269,14 @@ def plot_appearance_subtypes_by_gender(original_df):
     cross_tab = pd.crosstab(original_df["pred_sub_category"], original_df["gender"], normalize="columns")
     cross_tab = cross_tab.transpose()
     cross_tab.plot(kind="bar", color={"Male": "blue", "Female": "lightblue"}, figsize=(10, 8))
-    plt.title("Subtypes of Appearance Related Replies by Gender")
+    plt.title(f"Subtypes of Appearance Related Replies by Gender for {args.platform.capitalize()}")
     plt.xlabel("Subtype of Appearance Related Reply")
     plt.ylabel("Proportion of Appearance Related Replies")
     plt.legend(title="Gender")
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
-    plt.savefig("appearance_subtypes_by_gender.png")
+    plt.savefig(f"{args.platform}_appearance_subtypes_by_gender.png")
 
 def appearance_subtypes_by_gender(original_df):
     ''' Function to analyse subtypes of appearance related replies by gender '''
@@ -387,17 +298,17 @@ def plot_reply_by_appearance(active_reply_counts):
     sns.scatterplot(x="reply_to_post_ratio", y="percentage_appearance_replies", data=active_reply_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"})
     # x scale logarithmic
     plt.xscale("log")
-    plt.title("Percentage of Appearance Related Replies by Replies to Post Ratio")
+    plt.title(f"Percentage of Appearance Related Replies by Replies to Post Ratio for {args.platform.capitalize()}")
     plt.xlabel("Replies to Post Ratio (log scale)")
     plt.ylabel("Percentage of Appearance Related Replies (%)")
     plt.legend(title="Gender")
     plt.show()
-    plt.savefig("scatter_reply_ratio_by_appearance.png")
+    plt.savefig(f"{args.platform}_scatter_reply_ratio_by_appearance.png")
 
 def load_day_counts(original_df, new=False):
     original_df["day"] = original_df["created_at"].dt.date
     dates = original_df["day"].unique()
-    if not os.path.exists("day_counts.csv") or new==True:
+    if not os.path.exists(f"{args.platform}_day_counts.csv") or new==True:
         records = []
         for date in dates:
             for gender in ["Male", "Female"]:
@@ -415,10 +326,10 @@ def load_day_counts(original_df, new=False):
 
         # Create dataframe of day by reply counts and appearance related reply counts
         day_counts = pd.DataFrame(records)
-        day_counts.to_csv("day_counts.csv", index=False)
+        day_counts.to_csv(f"{args.platform}_day_counts.csv", index=False)
 
     else:
-        day_counts = pd.read_csv("day_counts.csv")
+        day_counts = pd.read_csv(f"{args.platform}_day_counts.csv")
 
     return day_counts 
 
@@ -426,10 +337,10 @@ def plot_appearance_by_engagement(day_counts, chart_type, label="percentage_appe
     ''' Function to visualize proportion of appearance related replies by number of replies per day '''
     plt.figure(figsize=(10, 6))
     if label == "percentage_appearance_replies":
-        plt.title("Percentage of Appearance Related Replies by Number of Replies per Day")
+        plt.title(f"Percentage of Appearance Related Replies by Number of Replies per Day for {args.platform.capitalize()}")
         plt.ylabel("Percentage of Appearance Related Replies (%)")
     elif label == "percentage_gbv_replies":
-        plt.title("Percentage of GBV Related Replies by Number of Replies per Day")
+        plt.title(f"Percentage of GBV Related Replies by Number of Replies per Day for {args.platform.capitalize()}")
         plt.ylabel("Percentage of GBV Related Replies (%)")
 
     if chart_type == "scatter":
@@ -450,7 +361,7 @@ def plot_appearance_by_engagement(day_counts, chart_type, label="percentage_appe
         plt.xticks(labels, rotation=45)
     
     plt.show()
-    plt.savefig(f"{chart_type}_{label}_by_reply_count.png")
+    plt.savefig(f"{args.platform}_{chart_type}_{label}_by_reply_count.png")
 
 
 def log_reply_bins(day_counts):
@@ -482,12 +393,12 @@ def appearance_by_engagement_analysis(original_df, active_reply_counts, label="p
     # scatter of reply to post ratio by labeled replies coloured by gender
     plt.figure(figsize=(10, 6))
     sns.scatterplot(x="reply_to_post_ratio", y=label, data=active_reply_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"})
-    plt.title(f"{label.replace('_', ' ').title()} by Reply to Post Ratio.")
+    plt.title(f"{label.replace('_', ' ').title()} by Reply to Post Ratio for {args.platform.capitalize()}")
     plt.xscale("log")
     plt.xlabel("Reply to Post Ratio")
     plt.ylabel(label.replace('_', ' ').title())
     plt.show()
-    plt.savefig(f"Scatter_{label}_by_reply_to_post_ratio.png")
+    plt.savefig(f"{args.platform}_scatter_{label}_by_reply_to_post_ratio.png")
 
     day_counts = load_day_counts(original_df, new=True) 
 
@@ -573,16 +484,15 @@ def gbv_subcategories_analysis(original_df, gbv_subcategories):
     fig, ax = plt.subplots(figsize=(18, 10))
 
     subcategory_proportions_df.plot(kind="barh", stacked=True, color=sns.color_palette("Set2", n_colors=len(gbv_subcategories)), ax=ax, legend=False)
-    plt.title("Proportion of GBV Related Replies in Each Subcategory by Ethnicity")
+    plt.title(f"Proportion of GBV Related Replies in Each Subcategory by Ethnicity for {args.platform.capitalize()}")
     plt.xlabel("Proportion of GBV Related Replies by Subcategory (%)")
     plt.ylabel("Ethnicity")
     y_labels = [f"{ethnicity} (n = {original_df[original_df['ethnicity_simplified'] == ethnicity]['mp_handle'].nunique()}, r = {original_df[(original_df['ethnicity_simplified'] == ethnicity) & (original_df['pred_binary'] == 1)]['item_id'].nunique()})" for ethnicity in subcategory_proportions_df.index]
     plt.yticks(ticks=range(len(y_labels)), labels=y_labels)
     plt.legend(loc="upper right", bbox_to_anchor=(1.2, 1), title="GBV Subcategory")
-    #plt.legend(title="Appearance Subcategory")
     plt.tight_layout()
     plt.show()
-    #plt.savefig("stacked_bar_appearance_subcategories_by_ethnicity.png")
+    plt.savefig(f"{args.platform}_stacked_bar_appearance_subcategories_by_ethnicity.png")
 
 
 def appearance_by_race_and_gender(original_df, active_reply_counts, label="pred_binary"):
@@ -592,8 +502,6 @@ def appearance_by_race_and_gender(original_df, active_reply_counts, label="pred_
     cross_tab = pd.crosstab(original_df[label], [original_df["gender"], original_df["ethnicity_simplified"]], normalize="columns")
     print(cross_tab)
 
-    #active_reply_counts["ethnicity"] = active_reply_counts["ethnicity"].fillna("Unknown")
-    #active_reply_counts["ethnicity_simplified"] = active_reply_counts["ethnicity"].map(ethnicity_dict)
     if label == "pred_binary":
         percentage_label = "percentage_gbv_replies"
     elif label == "pred_contains_appearance":
@@ -610,12 +518,12 @@ def appearance_by_race_and_gender(original_df, active_reply_counts, label="pred_
     plt.figure(figsize=(12, 8))
     sns.scatterplot(x="reply_to_post_ratio", y=percentage_label, data=active_reply_counts, hue="minority_status", style="gender")
     plt.xscale("log")
-    plt.title(f"{label.replace('_', ' ').upper()} by Replies to Post Ratio, Colored by Ethnicity and Gender")
+    plt.title(f"{label.replace('_', ' ').upper()} by Replies to Post Ratio, Colored by Ethnicity and Gender, for {args.platform.capitalize()}")
     plt.xlabel("Replies to Post Ratio (log scale)")
     plt.ylabel("Percentage of Appearance Related Replies (%)")
     plt.legend(title="Ethnicity and Gender")
     plt.show()
-    plt.savefig(f"scatter_reply_ratio_to_{percentage_label}_by_ethnicity.png")
+    plt.savefig(f"{args.platform}_scatter_reply_ratio_to_{percentage_label}_by_ethnicity.png")
 
     #print(active_reply_counts.head(10))
 
@@ -630,15 +538,15 @@ def appearance_by_race_and_gender(original_df, active_reply_counts, label="pred_
     plt.figure(figsize=(8, 6))
     sns.boxplot(x="ethnicity_simplified", y=percentage_label, data=active_reply_counts, hue="gender", palette={"Male": "blue", "Female": "lightblue"})
     if percentage_label == "percentage_appearance_replies":
-        plt.title(f"Percentage of Appearance Related Replies by Ethnicity and Gender")
+        plt.title(f"Percentage of Appearance Related Replies by Ethnicity and Gender for {args.platform.capitalize()}")
         plt.ylabel(f"Percentage of Appearance Related Replies (%)")
     elif percentage_label == "percentage_gbv_replies":
-        plt.title(f"Percentage of GBV Related Replies by Ethnicity and Gender")
+        plt.title(f"Percentage of GBV Related Replies by Ethnicity and Gender for {args.platform.capitalize()}")
         plt.ylabel(f"Percentage of GBV Related Replies (%)")
     plt.xlabel("Ethnicity")
     plt.legend(title="Gender")
     plt.show()
-    plt.savefig(f"box_{percentage_label}_by_ethnicity_and_gender.png")
+    plt.savefig(f"{args.platform}_box_{percentage_label}_by_ethnicity_and_gender.png")
 
     ## Linear regression of percentage of appearance related replies by ethnicity and gender
     linear_model = smf.ols(formula=f"{percentage_label} ~ C(minority_status) + C(gender) + C(minority_status):C(gender)", data=active_reply_counts).fit()
@@ -676,6 +584,10 @@ def appearance_by_age_and_gender(original_df, active_mp_details, label="percenta
     active_mp_details["age"] = 2026 - active_mp_details["wiki_birth_year"].astype(int)
     print(active_mp_details["age"].describe())
 
+    # Describe MPs by age and gender
+    print("Number of MPs by age and gender:")
+    print(active_mp_details.groupby("gender")["age"].describe())
+
     # Correlation between age and percentage of appearance related replies
     correlation, p_value = stats.spearmanr(active_mp_details["age"].dropna(), active_mp_details[label].dropna())
     print("Spearman's rank correlation between age and percentage of appearance related replies:")
@@ -701,7 +613,7 @@ def appearance_by_age_and_gender(original_df, active_mp_details, label="percenta
     plt.ylabel(f"Percentage of {label.replace('_', ' ').title()} (%)")
     plt.legend(title="Gender")
     plt.show()
-    plt.savefig(f"scatter_age_by_{label}.png")
+    plt.savefig(f"{args.platform}_scatter_age_by_{label}.png")
 
     plt.figure(figsize=(10, 6))
     print(f"Minimum age: {active_mp_details['age'].min()}, Maximum age: {active_mp_details['age'].max()}, Number of MPs with age data: {active_mp_details['age'].notna().sum()}")
@@ -712,12 +624,12 @@ def appearance_by_age_and_gender(original_df, active_mp_details, label="percenta
     mean_appearance_by_age_group = active_mp_details.groupby(["age_group", "gender"])[label].mean().reset_index()
     print(mean_appearance_by_age_group)
     sns.barplot(x="age_group", y=label, data=mean_appearance_by_age_group, hue="gender", palette={"Male": "blue", "Female": "lightblue"}, errorbar="sd")
-    plt.title(f"{label.replace('_', ' ').title()} by Age Group and Gender")
+    plt.title(f"{label.replace('_', ' ').title()} by Age Group and Gender for {args.platform.capitalize()}")
     plt.xlabel("Age Group")
     plt.ylabel(f"Mean {label.replace('_', ' ').title()} (%)")
     #plt.legend(title="Gender")
     plt.show()
-    plt.savefig(f"bar_age_group_by_{label}.png")
+    plt.savefig(f"{args.platform}_bar_age_group_by_{label}.png")
 
 def one_hot_gbv_category_labels(active_df):
     print("======== ONE HOT ENCODING GBV CATEGORY LABELS ========")
@@ -803,16 +715,20 @@ def analyse_gbv_subcategories(active_df, gbv_subcategories, only=False, comparis
         color_b = "green"
     plt.barh(y=reformat_df["Category"], width=reformat_df[f"{a}_width"], color=color_a, label=f"{a}")
     plt.barh(y=reformat_df["Category"], width=reformat_df[f"{b}_width"], left=reformat_df[f"{b}_Left"], color=color_b, label=f"{b}")
-    plt.title(f"Percentage of Replies Belonging to Each GBV Subcategory by {comparison.title()}")
+    plt.title(f"Percentage of Replies Belonging to Each GBV Subcategory by {comparison.title()} for {args.platform.capitalize()}")
     plt.xlabel("Percentage of Replies (%)")
     plt.ylabel("GBV Subcategory")
     limits = (int((round(reformat_df[f"{b}_Left"].min())-1)), int((round(reformat_df[f"{a}_width"].max())+1)))
     print(f"X-axis limits: {limits}")
     plt.xlim(limits)
     plt.xticks(range(limits[0], limits[1]), [f"{abs(i)} %" for i in range(limits[0], limits[1])])
+    # Add percentage labels to the bars
+    for index, row in reformat_df.iterrows():
+        plt.text(row[f"{a}_width"] + 0.5, index, f"{abs(row[f'{a}']):.2f}%", va='center', ha='left', color='black')
+        plt.text(row[f"{b}_Left"] - 0.5, index, f"{abs(row[f'{b}']):.2f}%", va='center', ha='right', color='black')
 
     plt.legend()
-    plt.savefig(f"population_pyramid_gbv_subcategories_by_{comparison}_{only}.png")
+    plt.savefig(f"{args.platform}_population_pyramid_gbv_subcategories_by_{comparison}_{only}.png")
 
 
 def select_active_mps(mp_details, original_df, reply_counts):
@@ -848,53 +764,74 @@ def proportion_target_replies_by_gender(active_df, label="pred_binary"):
     cross_tab = pd.crosstab(active_df[label], active_df["gender"], normalize="columns")
     print(cross_tab)
 
-def load_appearance_labels(active_df):
-    appearance_df = pd.read_csv("bluesky_replies_jan-jun_for_analysis.csv")
+def load_appearance_labels(active_df, platform="bluesky"):
+    if platform == "bluesky":
+        fp = "exp10_mixed_weak_gold_predictions_bluesky_posts_currentMPs_Jun_cleaned.csv"
+    elif platform == "twitter":
+        fp = "twitter_posts_currentMPs_2026-01-01_to_2026-06-30_cleaned_afterFiltering_(reply-1_reply-2).csv"
+    appearance_df = pd.read_csv(fp, dtype={"comment_id": str, "item_id": str, "data_id": str})
     print(f"Length of appearance_df: {len(appearance_df)}")
+    appearance_df_id_col = get_col_name(appearance_df)
+    ## Check if duplicates exist in appearance_df based on the data_id column
+    if appearance_df_id_col is not None:
+        duplicates = appearance_df[appearance_df.duplicated(subset=[appearance_df_id_col], keep=False)]
+        if not duplicates.empty:
+            print(f"Warning: There are {len(duplicates)} duplicate rows in appearance_df based on the '{appearance_df_id_col}' column.")
+            print(duplicates)
 
-    active_df = active_df.merge(appearance_df[["item_id", "pred_contains_appearance"]], on="item_id", how="left")
+    data_id_col = "comment_id" if "comment_id" in appearance_df.columns else "item_id" if "item_id" in appearance_df.columns else "data_id" if "data_id" in appearance_df.columns else None
+    if data_id_col is None:
+        raise ValueError("No valid data_id column found in appearance_df. Expected one of 'comment_id', 'item_id', or 'data_id'.")
+    active_df = active_df.merge(appearance_df[[data_id_col, "pred_contains_appearance"]], left_on="data_id", right_on=data_id_col, how="left")
     print(f"Length of active_df after merging with appearance_df: {len(active_df)}")
-    assert active_df["pred_contains_appearance"].isna().sum() == 0, "There are items in active_df with no appearance related labels after merging with appearance_df."
-    assert active_df["pred_binary"].isna().sum() == 0, "There are items in active_df with no GBV related labels after merging with appearance_df."
-    assert active_df["cleaned_text"].isna().sum() == 0, "There are items in active_df with no cleaned_text after merging with appearance_df."
-    assert active_df["data_id"].isna().sum() == 0, "There are items in active_df with no data_id after merging with appearance_df."
+    assert active_df["pred_contains_appearance"].isna().sum() == 0, "There are items in df with no appearance related labels after merging with appearance_df."
+    assert active_df["pred_binary"].isna().sum() == 0, "There are items in df with no GBV related labels after merging with appearance_df."
+    assert active_df["cleaned_text"].isna().sum() == 0, "There are items in df with no cleaned_text after merging with appearance_df."
+    assert active_df["data_id"].isna().sum() == 0, "There are items in df with no data_id after merging with appearance_df."
+
+    ## Identify items in appearance id with no corresponding items in active_df
+    missing_items = set(appearance_df[data_id_col]) - set(active_df["data_id"])
+    if len(missing_items) > 0:
+        print(f"Warning: There are {len(missing_items)} items in appearance_df with no corresponding items in active_df.")
 
     return active_df
 
 
 def main(args):
-    if args.input_file:
-        original_df = pd.read_csv(args.input_file)
+    if os.path.exists(f"{args.platform}_filtered.csv") and args.new == False:
+        original_df = pd.read_csv(f"{args.platform}_filtered.csv", dtype={"comment_id": str, "item_id": str, "data_id": str}, parse_dates=["created_at"])
+        original_df["created_at"] = pd.to_datetime(original_df["created_at"], errors='coerce', utc=True, format="mixed")
     else:
-        original_df = load_and_merge_data(platform=args.platform, new=args.new)
+        original_df = load_and_merge_data(platform=args.platform, new=args.new, main_df_path=args.main_df_path, labelled_df_path=args.labelled_df_path)
 
-    #print(f"Number of items with missing data_id in original_df before time filtering: {original_df['data_id'].isna().sum()}")
-    #print(f"Number of items with missing cleaned_text in original_df before time filtering: {original_df['cleaned_text'].isna().sum()}")
+        #print(f"Number of items with missing data_id in original_df before time filtering: {original_df['data_id'].isna().sum()}")
+        #print(f"Number of items with missing cleaned_text in original_df before time filtering: {original_df['cleaned_text'].isna().sum()}")
 
-    rep_logger.info(f"Loaded data for platform: {args.platform}")
+        rep_logger.info(f"Loaded data for platform: {args.platform}")
 
-    # Filter data after 2024-07-04T00:00:00
-    original_df["created_at"] = pd.to_datetime(original_df["created_at"], errors='coerce', utc=True, format="mixed")
-    original_df = original_df[(original_df["created_at"] >= pd.to_datetime("2026-01-01T00:00:00Z"))&(original_df["created_at"] <= pd.to_datetime("2026-06-30T23:59:59Z"))]
+        # Filter data after 2024-07-04T00:00:00
+        #original_df["created_at"] = pd.to_datetime(original_df["created_at"], errors='coerce', utc=True, format="mixed")
+        original_df = original_df[(original_df["created_at"] >= pd.to_datetime("2026-01-01T00:00:00Z"))&(original_df["created_at"] <= pd.to_datetime("2026-06-30T23:59:59Z"))]
+        original_df.to_csv(f"{args.platform}_filtered.csv", index=False)
 
+    print(original_df["created_at"].dtypes)
 
     #print(f"Number of items with missing data_id in original_df after time filtering: {original_df['data_id'].isna().sum()}")
     #print(f"Number of items with missing cleaned_text in original_df after time filtering: {original_df['cleaned_text'].isna().sum()}")
 
     original_df = original_df[original_df["cleaned_text"].notna()]
     print(f"Length of original_df after filtering for non-null cleaned_text: {len(original_df)}")
+    original_df = original_df.loc[original_df["cleaned_text"].str.len() >= 1]
     print(f"Number of items with missing pred_binary in original_df after filtering for non-null cleaned_text: {original_df['pred_binary'].isna().sum()}")
     print(f"Number of items with missing data_id in original_df after filtering for non-null cleaned_text: {original_df['data_id'].isna().sum()}")
 
     ## Summary statistics before processing 
-    #dataset_summary(original_df)
+    dataset_summary(original_df)
 
     ## Load MP details and merge with original_df
-    original_df, mp_details = load_mp_details_and_merge(original_df)
+    original_df, mp_details = load_mp_details_and_merge(original_df, platform=args.platform)
 
-    plot_account_status(mp_details)
-
-    exit()
+    plot_account_status(mp_details, platform=args.platform)
     
     ## Export list of MPs who have bluesky account but did not post during the period of analysis
     #mps_with_posts = set(original_df["mp_handle"])
@@ -906,6 +843,7 @@ def main(args):
 
     ## Remove duplicates for analysis 
     original_df = original_df[original_df["duplicates"].isin(["first duplicate", "no duplicates"])]
+    print(f"Length of original_df after removing duplicates: {len(original_df)}")
 
     # Analyse by post type (excluding duplicates)
     post_counts = mp_post_analysis(original_df)
@@ -914,19 +852,19 @@ def main(args):
     # Filtering to only public replies to MPs 
     original_df = original_df[(original_df["item_type"] == "reply-1") | (original_df["item_type"] == "reply-2")]
     original_df = original_df[original_df["author_type"] == "by_public"]
+    print(f"Length of original_df after filtering to only public replies to MPs: {len(original_df)}")
 
     ## MPs with posts but no replies:
-    #mps_with_posts = set(post_counts["mp_handle"])
-    #mps_with_replies = set(original_df["mp_handle"])
-    #mps_with_posts_but_no_replies = mps_with_posts - mps_with_replies
-    #rep_logger.info(f"MPs with posts but no replies: {mps_with_posts_but_no_replies}")
+    mps_with_posts = set(post_counts["mp_handle"])
+    mps_with_replies = set(original_df["mp_handle"])
+    mps_with_posts_but_no_replies = mps_with_posts - mps_with_replies
+    rep_logger.info(f"MPs with posts but no replies: {mps_with_posts_but_no_replies}")
 
     reply_counts = mp_reply_analysis(original_df)
     print(f"Reply counts by MP: {reply_counts.head()}")
 
     ## Proportion of replies after deduplication:
-    #proportion_replies_by_gender(original_df)
-
+    proportion_replies_by_gender(original_df)
 
     mp_details = mp_details[["parliament_name",
     f"{args.platform}_handle", "gender", "minority_status", "ethnicity", "wiki_birth_year"]]
@@ -948,10 +886,10 @@ def main(args):
     print(mp_details.groupby("gender")["reply_to_post_ratio"].describe())
 
     ## plot as histogram
-    #plot_reply_distribution(reply_counts)
+    plot_reply_distribution(reply_counts)
 
-    #mannwhitney_by_group(mp_details, label="reply_count", group_by="gender")
-    #mannwhitney_by_group(mp_details, label="reply_to_post_ratio", group_by="gender")
+    mannwhitney_by_group(mp_details, label="reply_count", group_by="gender")
+    mannwhitney_by_group(mp_details, label="reply_to_post_ratio", group_by="gender")
 
 
     active_df, active_mp_details = select_active_mps(mp_details, original_df, reply_counts)
@@ -961,19 +899,28 @@ def main(args):
     print(f"Number of replies which are empty strings: {(active_df['cleaned_text'] == '').sum()}")
     print(f"Number of items with missing cleaned_text in active_df: {active_df['cleaned_text'].isna().sum()}")
 
-    #proportion_replies_by_gender(active_df)
-
-
-    #mannwhitney_by_group(active_mp_details, label="reply_count", group_by="gender")
-    #mannwhitney_by_group(active_mp_details, label="reply_to_post_ratio", group_by="gender")
-
-    ## Incorporate appearance related labels into active_df and active_mp_details
-    active_df = load_appearance_labels(active_df)
+    proportion_replies_by_gender(active_df)
+    mannwhitney_by_group(active_mp_details, label="reply_count", group_by="gender")
+    mannwhitney_by_group(active_mp_details, label="reply_to_post_ratio", group_by="gender")
 
     #dataset_summary(active_df)
 
-    #proportion_target_replies_by_gender(active_df, label="pred_binary")
-    #proportion_target_replies_by_gender(active_df, label="pred_contains_appearance")
+    ## Remove replies length 1 or less
+    #active_df = active_df[active_df["cleaned_text"].str.len() > 1]
+    #print(f"Length of active_df after removing replies with length 1 or less: {len(active_df)}")
+    #exit()
+
+    ## Incorporate appearance related labels into active_df and active_mp_details
+    active_df = load_appearance_labels(active_df, platform=args.platform)
+
+
+
+    # Proportion of appearance replies by reply type (reply-1 vs reply-2)
+    print(f"Proportion of appearance related replies by reply type:")
+    print(active_df.groupby("item_type")["pred_contains_appearance"].mean())
+
+    proportion_target_replies_by_gender(active_df, label="pred_binary")
+    proportion_target_replies_by_gender(active_df, label="pred_contains_appearance")
 
     gbv_count = active_df.groupby("mp_handle")["pred_binary"].sum().reset_index()
     appearance_count = active_df.groupby("mp_handle")["pred_contains_appearance"].sum().reset_index()
@@ -995,19 +942,21 @@ def main(args):
     assert active_mp_details["percentage_gbv_replies"].isna().sum() == 0, "There are MPs in active_reply_counts with NaN percentage of GBV related replies."
 
 
-    #mannwhitney_by_group(active_mp_details, label="percentage_appearance_replies", group_by="gender")
-    #mannwhitney_by_group(active_mp_details, label="percentage_gbv_replies", group_by="gender")
+    mannwhitney_by_group(active_mp_details, label="percentage_appearance_replies", group_by="gender")
+    mannwhitney_by_group(active_mp_details, label="percentage_gbv_replies", group_by="gender")
 
+    ## Analyse by engagement level
+    appearance_by_engagement_analysis(active_df, active_mp_details, label="percentage_appearance_replies")
+    appearance_by_engagement_analysis(active_df, active_mp_details, label="percentage_gbv_replies")
 
-    #appearance_by_engagement_analysis(active_df, active_mp_details, label="percentage_appearance_replies")
-    #appearance_by_engagement_analysis(active_df, active_mp_details, label="percentage_gbv_replies")
-
+    ## Analyse by ethnicity
     active_df, active_mp_details = simplify_ethnicity(active_df, active_mp_details)
-    #appearance_by_race_and_gender(active_df, active_mp_details, label="pred_binary")
+    appearance_by_race_and_gender(active_df, active_mp_details, label="pred_binary")
 
+    ## Analyse by age group
     active_df, active_mp_details = handle_age_data(active_df, active_mp_details)
-    #appearance_by_age_and_gender(active_df, active_mp_details, label="percentage_appearance_replies")
-    #appearance_by_age_and_gender(active_df, active_mp_details, label="percentage_gbv_replies")
+    appearance_by_age_and_gender(active_df, active_mp_details, label="percentage_appearance_replies")
+    appearance_by_age_and_gender(active_df, active_mp_details, label="percentage_gbv_replies")
 
     print("Percentage of GBV related replies per MP by ethnicity and gender:")
     print(active_mp_details.groupby(["gender", "minority_status"])["percentage_gbv_replies"].mean())
@@ -1023,7 +972,8 @@ def main(args):
     return active_df, active_mp_details
 
 parser = argparse.ArgumentParser(description="Statistical analysis of appearance related replies to MPs on Bluesky")
-parser.add_argument("--input_file", type=str, help="Path to the input CSV file")
+parser.add_argument("--main_df_path", type=str, help="Path to the raw input CSV file", default=None)
+parser.add_argument("--labelled_df_path", type=str, help="Path to the labelled input CSV file", default=None)
 parser.add_argument("--platform", type=str, default="bluesky", help="Platform to analyze (default: bluesky)")
 parser.add_argument("--new", action="store_true", help="Flag to indicate whether to load new data (default: False)")
 args = parser.parse_args()
@@ -1038,7 +988,6 @@ if __name__ == "__main__":
 
     exit()
 
-# To Do: Sentiment, Relationship between google trends and appearance related replies
 
 
 
