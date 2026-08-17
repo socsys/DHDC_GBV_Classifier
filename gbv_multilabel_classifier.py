@@ -30,17 +30,15 @@ import onnxruntime
 from onnx import shape_inference
 from onnxruntime.quantization.shape_inference import quant_pre_process
 
-
-
 torch.cuda.empty_cache()
 
 parser = ArgumentParser()
 parser.add_argument("--train", action="store_true", help="Whether to run training.")
 parser.add_argument("--train_data_name", type=str, default="EXIST", help="Name of the training dataset. Options: EXIST")
 parser.add_argument("--train_data_path", nargs="?", type=str, const="../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json", help="Path to the training dataset.")
-parser.add_argument("--val_data_path", type=str, nargs="?", const="../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json", help="Path to the validation dataset.")
+parser.add_argument("--val_data_path", type=str, nargs="?", help="Path to the validation dataset.")
 parser.add_argument("--inf", action="store_true", help="Whether to run inference with the trained model.")
-parser.add_argument("--inf_data_path", type=str, nargs="?", const="/home/eddie/DHDC/exp10_mixed_weak_gold_deberta-v3-small_predictions_bluesky_posts_RecollectionApr28_cleaned.csv", help="Path to the dataset for inference.")
+parser.add_argument("--inf_data_path", type=str, nargs="?", help="Path to the dataset for inference.")
 parser.add_argument("--resume_inf", action="store_true", help="Whether to resume inference.")
 parser.add_argument("--save", action="store_true", help="Whether to save the trained model.")
 parser.add_argument("--export", action="store_true", help="Whether to export the trained model to a format suitable for the DToxify Extension")
@@ -68,8 +66,10 @@ def compute_class_weights(labels: List[List[int]], num_classes: int = 6) -> List
     pos_counts = []
     for i in range(num_classes):
         pos_counts.append(sum(label[i] for label in labels))
+    if any(pos == 0 for pos in pos_counts):
+        print(f"Warning: One or more classes have zero positive samples. Pos counts: {pos_counts}")
     neg_counts = [N - pos for pos in pos_counts]
-    class_weights = [x/y for x,y in zip(neg_counts, pos_counts) if y > 0]
+    class_weights = [x/y if y > 0 else x/1 for x,y in zip(neg_counts, pos_counts)]
     print(f"Calculated class weights: {class_weights}")
     return class_weights
 
@@ -82,7 +82,8 @@ def flatten(xss: List[List[Any]]) -> List[Any]:
 
 def clean_text(tweet: str) -> str:
     """Remove social media handles and URLs from text."""
-    assert isinstance(tweet, str), f"Expected a string, but got {type(tweet)}, with value: {tweet}"
+    if not isinstance(tweet, str):
+        raise TypeError(f"Expected a string, but got {type(tweet)} with value: {tweet}")
     result = re.sub(r'(RT\s@[A-Za-z]+[A-Za-z0-9-_]+)', '', tweet)
     result = re.sub(r'(@[A-Za-z0-9-_]+)', '', result)
     result = re.sub(r'https?\S+', '', result)
@@ -120,7 +121,7 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, inf=False):
             encodings["attention_mask"],
             data_id
         )
-    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0) if not inf else torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
 class CustomDataLoader:
     ''' Custom data loader with function that handles processing raw labeled data files, cleaning text, and converting labels to multi-hot format. '''
@@ -130,7 +131,8 @@ class CustomDataLoader:
         self.split = split
         self.label2id_dict = label2id_dict
         self.multilingual = multilingual
-        assert self.data_name == "EXIST", "Currently only supports EXIST dataset. Please provide a valid data_name."
+        if not self.data_name == "EXIST":
+            raise ValueError(f"Currently only supports EXIST dataset. Please provide a valid data_name. Got {self.data_name}.")
 
     def _load_raw_data(self):
         ''' Loads raw data from the specified path and filters based on the split. Currently only implemented for EXIST dataset. '''
@@ -139,6 +141,8 @@ class CustomDataLoader:
             raw_data = pd.read_json(self.data_path, orient='index')
         elif self.data_path.endswith(".csv") or self.data_path.endswith(".tsv"):
             raw_data = pd.read_csv(self.data_path, sep='\t' if self.data_path.endswith(".tsv") else ',')
+        else:
+            raise ValueError(f"Unsupported file format: {self.data_path}. Please provide a .json, .csv, or .tsv file.")
         if self.split == "train":
             if self.data_name == "EXIST": 
                 if self.multilingual:
@@ -154,9 +158,9 @@ class CustomDataLoader:
         labels = [0 for _ in range(len(self.label2id_dict[f"level_{level}"]))]
         if self.data_name == "EXIST":
             non_gbv = "NO" if level == 1 else "-"
-            if x[non_gbv] == 3:
+            if x[non_gbv] == 3: # 6 annotators split on label
                 return 99
-            elif x[non_gbv] > 3:
+            elif x[non_gbv] > 3: # Majority of annotators (4/6) labeled as non-GBV
                 labels[0] = 1
                 return labels
             else:
@@ -166,7 +170,7 @@ class CustomDataLoader:
                 elif level == 2:
                     for k, v in x.items():
                         if k in self.label2id_dict[f"level_{level}"]:
-                            if v >= 2:
+                            if v >= 2: # EXIST task applies label if at least 2 annotators labeled it as such
                                 labels[self.label2id_dict[f"level_{level}"][k]] = 1
                     labels[0] = 0 # ensure that the non-gbv label is set to 0 if any gbv label is present
             if sum(labels) == 0:
@@ -249,7 +253,8 @@ class GBVMultiTaskClassifier(nn.Module, PyTorchModelHubMixin):
         class_weights: torch.Tensor | None,
     ) -> torch.Tensor:
         label_indices = labels.argmax(dim=1).long()
-        assert self.binary_loss_type == "focal", f"Code currently only supports focal loss for binary classification, but got {self.binary_loss_type}"
+        if self.binary_loss_type != "focal":
+            raise ValueError(f"Code currently only supports focal loss for binary classification, but got {self.binary_loss_type}")
         ce_loss = F.cross_entropy(logits, label_indices, weight=class_weights, reduction="none")
         probs = torch.softmax(logits, dim=-1)
         pt = probs.gather(1, label_indices.unsqueeze(1)).squeeze(1).clamp(1e-4, 1 - 1e-4)
@@ -261,7 +266,8 @@ class GBVMultiTaskClassifier(nn.Module, PyTorchModelHubMixin):
         labels: torch.Tensor,
         class_weights: torch.Tensor | None,
     ) -> torch.Tensor:
-        assert self.category_loss_type == "focal", f"Code currently only supports focal loss for category classification, but got {self.category_loss_type}"
+        if self.category_loss_type != "focal":
+            raise ValueError(f"Code currently only supports focal loss for category classification, but got {self.category_loss_type}")
         if class_weights is not None:
             class_matrix = class_weights.unsqueeze(0).expand_as(logits)
         else:
@@ -522,7 +528,7 @@ def train(model, tokenizer, train_dataset, val_dataset, label2id_dict, best_save
     # load best model at end 
     print("Loading best model from checkpoint for final evaluation.")
     model.eval()
-    model.load_state_dict(torch.load(best_save_path))
+    model.load_state_dict(torch.load(best_save_path, map_location=device, weights_only=True)) if best_save_path is not None else None
 
     return model
 
@@ -534,16 +540,17 @@ def train(model, tokenizer, train_dataset, val_dataset, label2id_dict, best_save
 class Optimizer:
     def __init__(self, model, tokenizer, dataset, device="cuda", num_category_labels=6):
         self.device = device
-        dataset = dataset.sample(frac=0.2, random_state=42).reset_index(drop=True) # shuffle dataset
-        self.df_train, self.df_val = train_test_split(dataset, test_size=0.10, stratify=dataset["binary_labels"], random_state=42)
-        self.train_loader = create_data_loader(self.df_train, tokenizer, batch_size=32)
-        self.val_loader = create_data_loader(self.df_val, tokenizer, batch_size=32)
+        self.model = model 
+        self.tokenizer = tokenizer
+        self.dataset = dataset.sample(frac=0.2, random_state=42).reset_index(drop=True) # shuffle dataset
+        self.df_train, self.df_val = train_test_split(self.dataset, test_size=0.10, stratify=self.dataset["binary_labels"], random_state=42)
+        self.train_loader = create_data_loader(self.df_train, self.tokenizer, batch_size=32)
+        self.val_loader = create_data_loader(self.df_val, self.tokenizer, batch_size=32)
 
         binary_class_weights = compute_class_weights(self.df_train.binary_labels, num_classes=2)
         category_class_weights = compute_class_weights(self.df_train.category_labels, num_classes=len(label2id_dict["level_2"]))
         self.binary_weight_tensor = torch.tensor(binary_class_weights, dtype=torch.float32, device=self.device)
         self.category_weight_tensor = torch.tensor(category_class_weights, dtype=torch.float32, device=self.device)
-        self.dataset = dataset
 
         self.num_category_labels = num_category_labels
 
@@ -558,20 +565,20 @@ class Optimizer:
         focal_gamma_category = 2 
 
         # build model
-        model.to(self.device)
-        model.focal_gamma_category = focal_gamma_category        
+        self.model.to(self.device)
+        self.model.focal_gamma_category = focal_gamma_category
 
-        optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         scaler = torch.amp.GradScaler(enabled=(self.device == "cuda"))
 
         best_val_f1 = float(0)
         for epoch in range(3):
-            model.train()
+            self.model.train()
             for step, batch in enumerate(self.train_loader):
                 optimizer.zero_grad(set_to_none=True)
                 moved = move_batch_to_device(batch, self.device)
                 with torch.autocast(device_type=(self.device if self.device == "cuda" else "cpu"), enabled=(self.device == "cuda")):
-                    outputs = model(
+                    outputs = self.model(
                         input_ids=moved["input_ids"],
                         attention_mask=moved["attention_mask"],
                         binary_labels=moved["binary_labels"],
@@ -619,7 +626,8 @@ class ICMCalculator:
     def __init__(self, num_labels, labels):
         self.num_labels = num_labels
         self.labels = labels
-        assert len(self.labels) > 0, "Labels list cannot be empty."         
+        if len(self.labels) == 0:
+            raise ValueError("Labels list cannot be empty.")
         counts = [sum(item[i] == 1 for item in labels) for i in range(num_labels)]
         
         probabilities = [count / len(labels) for count in counts]
@@ -831,7 +839,7 @@ def _evaluate_wrapped_model(model, tokenizer, dataset, device="cuda"):
     with torch.no_grad():
         predictions = []
         for item in dataloader:
-            outputs = model(input_ids=item[0].to("cuda"), attention_mask=item[1].to("cuda"))
+            outputs = model(input_ids=item[0].to(device), attention_mask=item[1].to(device))
             predictions.extend(outputs)
 
         gold_labels = labels.tolist()
@@ -850,7 +858,7 @@ def _evaluate_wrapped_model(model, tokenizer, dataset, device="cuda"):
 def _save_model_for_extension(model, tokenizer, save_path):
     dummy_ids = torch.randint(0, 1000, (1, 256), dtype=torch.long)
     dummy_mask = torch.ones((1, 256), dtype=torch.long)
-    torch.onnx.export(model, (dummy_ids.to("cuda"), dummy_mask.to("cuda")), f"{save_path}/gbv_model.onnx", input_names=["input_ids", "attention_mask"], output_names=["logits"], dynamic_axes={"input_ids": {0: "batch_size", 1: "sequence_length"}, "attention_mask": {0: "batch_size", 1: "sequence_length"}, "logits": {0: "batch_size"}}, opset_version=17, external_data=False, do_constant_folding=False, dynamo=False)
+    torch.onnx.export(model, (dummy_ids.to(device), dummy_mask.to(device)), f"{save_path}/gbv_model.onnx", input_names=["input_ids", "attention_mask"], output_names=["logits"], dynamic_axes={"input_ids": {0: "batch_size", 1: "sequence_length"}, "attention_mask": {0: "batch_size", 1: "sequence_length"}, "logits": {0: "batch_size"}}, opset_version=17, external_data=False, do_constant_folding=False, dynamo=False)
 
     #quant_utils.load_model_with_shape_infer = lambda model_path: onnx.load(f"{save_path}/gbv_model.onnx")
     #inferred = shape_inference.infer_shapes_path(f"{save_path}/gbv_model.onnx", f"{save_path}/gbv_model_inferred.onnx")
@@ -881,7 +889,7 @@ def _save_model_for_extension(model, tokenizer, save_path):
     os.remove(f"{save_path}/gbv_model_quant_temp.onnx")
 
 
-def _evaluate_exported_model(save_path, tokenizer, wrapped_model=None):
+def _evaluate_exported_model(save_path, tokenizer, wrapped_model=None, device="cuda"):
     original = onnxruntime.InferenceSession(f"{save_path}/gbv_model_preprocessed.onnx")
     quantized = onnxruntime.InferenceSession(f"{save_path}/onnx/model_quantized.onnx")
 
@@ -895,7 +903,7 @@ def _evaluate_exported_model(save_path, tokenizer, wrapped_model=None):
     with torch.no_grad():
         wrapped_model_out = []
         for item in dataloader:
-            outputs = wrapped_model(input_ids=item[0].to("cuda"), attention_mask=item[1].to("cuda"))
+            outputs = wrapped_model(input_ids=item[0].to(device), attention_mask=item[1].to(device))
             wrapped_model_out.extend(outputs)
 
     orig_out = original.run(None, {"input_ids": input_ids, "attention_mask": attention_mask})
@@ -975,7 +983,7 @@ def export_model(model, tokenizer, save_path, test_dataset=None):
 # Define main function
 # ----------------------------------
 
-def main(label2id_dict, train_flag=False, train_data_name = None, train_data_path=None, val_data_path=None, model_ref="NLP-LTU/bertweet-large-sexism-detector"):
+def main(label2id_dict, train_flag=False, train_data_name = None, train_data_path=None, val_data_path=None, model_ref="NLP-LTU/bertweet-large-sexism-detector", device="cuda"):
     print(f"Using model reference: {model_ref}")
 
     if args.train and args.inf:
@@ -1000,7 +1008,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         category_loss_type="focal",
         focal_gamma_binary=1.0,
         focal_gamma_category=focal_gamma_category,
-    ).to("cuda")
+    ).to(device)
 
     tokenizer = AutoTokenizer.from_pretrained(model_ref)
     if tokenizer.pad_token is None:
@@ -1015,7 +1023,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
     # print(vars(model))
 
     # Optimizer study
-    #optuna_study = Optimizer(model, tokenizer, train_data, device="cuda", model_ref=model_ref, num_category_labels=num_category_labels).run_search(n_trials=20)
+    #optuna_study = Optimizer(model, tokenizer, train_data, device=device, model_ref=model_ref, num_category_labels=num_category_labels).run_search(n_trials=20)
     #print(f"Best hyperparameters from Optuna study: {optuna_study.best_params}")
     #exit()
 
@@ -1038,16 +1046,16 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         if not os.path.exists("checkpoints/"):
             os.makedirs("checkpoints/")
 
-        trained_model = train(model, tokenizer, train_data, val_data, label2id_dict, best_save_path=f"checkpoints/{model_ref.split('/')[-1]}_{train_data_name}.pt", lr=lr, weight_decay=weight_decay, device="cuda")
-         
+        trained_model = train(model, tokenizer, train_data, val_data, label2id_dict, best_save_path=f"checkpoints/{model_ref.split('/')[-1]}_{train_data_name}.pt", lr=lr, weight_decay=weight_decay, device=device)
+
         # save state dict for later use
         torch.save(trained_model.state_dict(), state_dict_path)
         print(f"Trained model state dict saved at {state_dict_path}")
-        trained_model.to("cuda")
+        trained_model.to(device)
 
     else:
-        model.load_state_dict(torch.load(state_dict_path)) 
-        model.to("cuda")
+        model.load_state_dict(torch.load(state_dict_path, weights_only=True, map_location=device))
+        model.to(device)
         trained_model = model
 
     test_data = CustomDataLoader(data_name = train_data_name, data_path = val_data_path,  split="dev", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
@@ -1056,7 +1064,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
     #print(test_data["category_labels"].value_counts())
     test_data = test_data[test_data["binary_labels"] != 99]
     test_data = test_data[test_data["category_labels"] != 99]
-    evaluation(trained_model, tokenizer, dataset=test_data, device="cuda")
+    evaluation(trained_model, tokenizer, dataset=test_data, device=device)
 
 
     if args.export:
@@ -1076,9 +1084,12 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         predictions = pd.DataFrame(predictions, columns=["data_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
         print(f"Length of predictions: {len(predictions)}")
 
-        assert any(predictions["pred_binary"] == 99) == False, "Found predictions with binary label 99, which should not occur."
-        assert any(predictions["pred_category"] == 99) == False, "Found predictions with category label 99, which should not occur."
-        assert len(predictions) <= len(inf_data), "Number of predictions exceeds number of input data points."
+        if any(predictions["pred_binary"] == 99):
+            raise ValueError("Found predictions with binary label 99, which should not occur.")
+        if any(predictions["pred_category"] == 99):
+            raise ValueError("Found predictions with category label 99, which should not occur.")
+        if len(predictions) > len(inf_data):
+            raise ValueError("Number of predictions exceeds number of input data points.")
 
         labelled_texts = pd.merge(inf_data, pd.DataFrame(predictions), on="data_id")
         print(labelled_texts.head())
