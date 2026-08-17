@@ -3,24 +3,27 @@ from export import export_model, normalize_merges
 from gbv_multilabel_classifier import *
 from handle_data import * 
 from evaluate import *
+import os 
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
 
 parser = ArgumentParser()
 parser.add_argument("--train", action="store_true", help="Whether to run training.")
 parser.add_argument("--train_data_name", type=str, default="EXIST", help="Name of the training dataset. Options: EXIST")
-parser.add_argument("--train_data_path", type=str, nargs="?", default="../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json", help="Path to the training dataset.") # Remove default for final sharing
-parser.add_argument("--val_data_path", type=str, nargs = "?", help="Path to the validation dataset.", default="../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json") # Remove default for final sharing 
+parser.add_argument("--train_data_path", type=str, nargs="?", default=os.getenv("TRAIN_DATA", None), help="Path to the training dataset.") # Remove default for final sharing
+parser.add_argument("--no_val", action="store_true", help="Whether to skip evaluation during training or inference. If set, no validation will be performed.")
+parser.add_argument("--val_data_path", type=str, nargs = "?", help="Path to the validation dataset.", default=os.getenv("VAL_DATA", None)) # Remove default for final sharing 
 parser.add_argument("--infr", action="store_true", help="Whether to run inference with the trained model.")
 parser.add_argument("--infr_data_path", type=str, nargs="?", help="Path to the dataset for inference.")
 parser.add_argument("--resume_infr", action="store_true", help="Whether to resume inference.")
-#parser.add_argument("--save", action="store_true", help="Whether to save the trained model.")
 parser.add_argument("--export", action="store_true", help="Whether to export the trained model to a format suitable for the DToxify Extension")
-parser.add_argument("--tokenizer_path", help="Path to tokenizer.json")
 parser.add_argument(
     "-o", "--output", default=None,
     help="Output path (defaults to overwriting input, with a .bak backup)"
 )
 parser.add_argument(
-    "--no-backup", action="store_true",
+    "--no_backup", action="store_true",
     help="Skip creating a .bak backup when overwriting in place"
     )
 args = parser.parse_args()
@@ -65,7 +68,7 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda", infr_data
     autocast_enabled = device == "cuda"
     batch_size = 32
     save_steps = 1000
-    csv_path = f"../dhdc_stats/processed_data/{infr_data_path.split('/')[-1].split('.')[-2]}_inference_predictions_temp.csv"
+    csv_path = f"{os.getenv("PROCESSED_DATA_DIR")}{infr_data_path.split('/')[-1].split('.')[-2]}_inference_predictions_temp.csv"
 
     print(f"Length of inference data: {len(inf_data)}")
     inf_data.dropna(subset=["text"], inplace=True)
@@ -137,17 +140,16 @@ def process_category_pred(pred_category_str, id2label_dict):
 # Define main function
 # ----------------------------------
 
-def main(label2id_dict, train_flag=False, train_data_name = None, train_data_path=None, val_data_path=None, model_ref="NLP-LTU/bertweet-large-sexism-detector", device="cuda"):
+def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", train_flag=False, train_data_name = None, train_data_path=None, no_val_flag=False, val_data_path=None, infr_flag=False, infr_data_path=None, resume_infr=False, export_flag=False, export_output=None, no_backup=False, device="cuda"):
     print(f"Using model reference: {model_ref}")
 
-    if args.train and args.infr:
-        print("To confirm, model is being trained and then used for inference.")
-
+    ## Set random seed for reproducibility
     seed = 51
     set_seed(seed)
 
     num_category_labels = len(label2id_dict["level_2"])
 
+    ## Define hyperparameters for training
     focal_gamma_category = 2 
     lr = 5e-6 
     weight_decay = 0.01 
@@ -212,22 +214,21 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         model.to(device)
         trained_model = model
 
-    test_data = CustomDataLoader(data_name = train_data_name, data_path = val_data_path,  split="dev", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
-    #print(test_data.head())
-    #print(test_data["binary_labels"].value_counts())
-    #print(test_data["category_labels"].value_counts())
-    test_data = test_data[test_data["binary_labels"] != 99]
-    test_data = test_data[test_data["category_labels"] != 99]
-    evaluation(trained_model, tokenizer, dataset=test_data, device=device)
+    if not no_val_flag:
+        test_data = CustomDataLoader(data_name = train_data_name, data_path = val_data_path,  split="dev", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
+        #print(test_data.head())
+        #print(test_data["binary_labels"].value_counts())
+        #print(test_data["category_labels"].value_counts())
+        test_data = test_data[test_data["binary_labels"] != 99]
+        test_data = test_data[test_data["category_labels"] != 99]
+        evaluation(trained_model, tokenizer, dataset=test_data, device=device)
 
-
-    if args.export:
+    if export_flag:
         export_model(trained_model, tokenizer, save_path=save_path, test_dataset=test_data)
-        normalize_merges(f"{save_path}/tokenizer.json", args.output, backup=not args.no_backup)
+        normalize_merges(f"{save_path}/tokenizer.json", export_output, backup=not no_backup)
 
-
-    if args.infr:
-        inf_data = pd.read_csv(args.infr_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str})
+    if infr_flag:
+        inf_data = pd.read_csv(infr_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str})
         print(f"Length of inference dataset: {len(inf_data)}")
         data_id_col = "comment_id" if "comment_id" in inf_data.columns else "item_id" if "item_id" in inf_data.columns else "data_id" # Update to match inf dataset labeling 
         inf_data.rename(columns={"cleaned_text": "text"}, inplace=True) if "cleaned_text" in inf_data.columns else None 
@@ -235,7 +236,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         inf_data.rename(columns={data_id_col: "data_id"}, inplace=True)
         ## For testing
         #inf_data = inf_data.sample(n=1000, random_state=42).reset_index(drop=True) 
-        predictions = inference(model, tokenizer, inf_data, resume=args.resume_infr, infr_data_path=args.infr_data_path)
+        predictions = inference(model, tokenizer, inf_data, resume=resume_infr, infr_data_path=infr_data_path)
         predictions = pd.DataFrame(predictions, columns=["data_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
         print(f"Length of predictions: {len(predictions)}")
 
@@ -267,7 +268,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         print(f"Length of labelled_texts: {len(labelled_texts)}")
         print(labelled_texts.head())
 
-        labelled_texts.to_csv(f"processed_data/{args.infr_data_path.split('.')[-2]}_predictions.csv", index=False)
+        labelled_texts.to_csv(f"{os.getenv("PROCESSED_DATA_DIR")}{infr_data_path.split('.')[-2]}_predictions.csv", index=False)
     
 
 if __name__ == "__main__":
@@ -276,4 +277,4 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Unsupported train_data_name: {args.train_data_name}. Please provide a valid dataset name.")
 
-    main(label2id_dict, train_flag = args.train, train_data_name=args.train_data_name, train_data_path=args.train_data_path, val_data_path=args.val_data_path, model_ref="NLP-LTU/bertweet-large-sexism-detector")
+    main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", train_flag = args.train, train_data_name=args.train_data_name, train_data_path=args.train_data_path, no_val_flag=args.no_val, val_data_path=args.val_data_path, infr_flag=args.infr, infr_data_path=args.infr_data_path, resume_infr=args.resume_infr, export_flag=args.export, export_output=args.output, no_backup=args.no_backup, device="cuda")
