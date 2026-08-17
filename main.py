@@ -1,5 +1,5 @@
 from metrics import ICMCalculator, get_f1_score, calculate_icm
-from export import export_model
+from export import export_model, normalize_merges
 from gbv_multilabel_classifier import *
 from handle_data import * 
 from evaluate import *
@@ -7,13 +7,22 @@ from evaluate import *
 parser = ArgumentParser()
 parser.add_argument("--train", action="store_true", help="Whether to run training.")
 parser.add_argument("--train_data_name", type=str, default="EXIST", help="Name of the training dataset. Options: EXIST")
-parser.add_argument("--train_data_path", nargs="?", type=str, const="../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json", help="Path to the training dataset.")
-parser.add_argument("--val_data_path", type=str, nargs="?", help="Path to the validation dataset.")
-parser.add_argument("--inf", action="store_true", help="Whether to run inference with the trained model.")
-parser.add_argument("--inf_data_path", type=str, nargs="?", help="Path to the dataset for inference.")
-parser.add_argument("--resume_inf", action="store_true", help="Whether to resume inference.")
-parser.add_argument("--save", action="store_true", help="Whether to save the trained model.")
+parser.add_argument("--train_data_path", type=str, nargs="?", default="../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json", help="Path to the training dataset.") # Remove default for final sharing
+parser.add_argument("--val_data_path", type=str, nargs = "?", help="Path to the validation dataset.", default="../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json") # Remove default for final sharing 
+parser.add_argument("--infr", action="store_true", help="Whether to run inference with the trained model.")
+parser.add_argument("--infr_data_path", type=str, nargs="?", help="Path to the dataset for inference.")
+parser.add_argument("--resume_infr", action="store_true", help="Whether to resume inference.")
+#parser.add_argument("--save", action="store_true", help="Whether to save the trained model.")
 parser.add_argument("--export", action="store_true", help="Whether to export the trained model to a format suitable for the DToxify Extension")
+parser.add_argument("--tokenizer_path", help="Path to tokenizer.json")
+parser.add_argument(
+    "-o", "--output", default=None,
+    help="Output path (defaults to overwriting input, with a .bak backup)"
+)
+parser.add_argument(
+    "--no-backup", action="store_true",
+    help="Skip creating a .bak backup when overwriting in place"
+    )
 args = parser.parse_args()
 
 def set_seed(seed: int = 42):
@@ -46,23 +55,23 @@ def save_model(model, tokenizer, save_path):
 # Define inference function
 # ----------------------------------
 
-def inference(model, tokenizer, inf_data, resume=False, device="cuda", inf_data_path=None):
+def inference(model, tokenizer, inf_data, resume=False, device="cuda", infr_data_path=None):
     print("Starting inference...")
-    if inf_data_path is None:
-        raise ValueError("inf_data_path must be provided for inference.")
+    if infr_data_path is None:
+        raise ValueError("infr_data_path must be provided for inference.")
     model.eval()
     
 
     autocast_enabled = device == "cuda"
     batch_size = 32
     save_steps = 1000
-    csv_path = f"processed_data/{inf_data_path.split('.')[-2]}_inference_predictions_temp.csv"
+    csv_path = f"../dhdc_stats/processed_data/{infr_data_path.split('/')[-1].split('.')[-2]}_inference_predictions_temp.csv"
 
     print(f"Length of inference data: {len(inf_data)}")
     inf_data.dropna(subset=["text"], inplace=True)
     inf_data.reset_index(drop=True, inplace=True)
 
-    inf_data_loader = create_data_loader(inf_data, tokenizer, batch_size=batch_size, inf=True)
+    inf_data_loader = create_data_loader(inf_data, tokenizer, batch_size=batch_size, infr=True)
     print(f"Created inference data loader with {len(inf_data_loader)} batches.")
 
     if resume == True:
@@ -131,7 +140,7 @@ def process_category_pred(pred_category_str, id2label_dict):
 def main(label2id_dict, train_flag=False, train_data_name = None, train_data_path=None, val_data_path=None, model_ref="NLP-LTU/bertweet-large-sexism-detector", device="cuda"):
     print(f"Using model reference: {model_ref}")
 
-    if args.train and args.inf:
+    if args.train and args.infr:
         print("To confirm, model is being trained and then used for inference.")
 
     seed = 51
@@ -214,10 +223,11 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
 
     if args.export:
         export_model(trained_model, tokenizer, save_path=save_path, test_dataset=test_data)
+        normalize_merges(f"{save_path}/tokenizer.json", args.output, backup=not args.no_backup)
 
 
-    if args.inf:
-        inf_data = pd.read_csv(args.inf_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str})
+    if args.infr:
+        inf_data = pd.read_csv(args.infr_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str})
         print(f"Length of inference dataset: {len(inf_data)}")
         data_id_col = "comment_id" if "comment_id" in inf_data.columns else "item_id" if "item_id" in inf_data.columns else "data_id" # Update to match inf dataset labeling 
         inf_data.rename(columns={"cleaned_text": "text"}, inplace=True) if "cleaned_text" in inf_data.columns else None 
@@ -225,7 +235,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         inf_data.rename(columns={data_id_col: "data_id"}, inplace=True)
         ## For testing
         #inf_data = inf_data.sample(n=1000, random_state=42).reset_index(drop=True) 
-        predictions = inference(model, tokenizer, inf_data, resume=args.resume_inf)
+        predictions = inference(model, tokenizer, inf_data, resume=args.resume_infr, infr_data_path=args.infr_data_path)
         predictions = pd.DataFrame(predictions, columns=["data_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
         print(f"Length of predictions: {len(predictions)}")
 
@@ -257,16 +267,12 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         print(f"Length of labelled_texts: {len(labelled_texts)}")
         print(labelled_texts.head())
 
-        labelled_texts.to_csv(f"processed_data/{args.inf_data_path.split('.')[-2]}_predictions.csv", index=False)
+        labelled_texts.to_csv(f"processed_data/{args.infr_data_path.split('.')[-2]}_predictions.csv", index=False)
     
 
 if __name__ == "__main__":
     if args.train_data_name == "EXIST":
         label2id_dict = {"level_1": {"NO":0, "YES":1}, "level_2": {"-":0, "IDEOLOGICAL-INEQUALITY":1, "STEREOTYPING-DOMINANCE":2, "OBJECTIFICATION":3, "SEXUAL-VIOLENCE":4, "MISOGYNY-NON-SEXUAL-VIOLENCE":5}}
-        if not args.train_data_path:
-            args.train_data_path = "../DHDC/data/EXIST 2025 Tweets Dataset/training/EXIST2025_training.json"
-        if not args.val_data_path:
-            args.val_data_path = "../DHDC/data/EXIST 2025 Tweets Dataset/dev/EXIST2025_dev.json"
     else:
         raise ValueError(f"Unsupported train_data_name: {args.train_data_name}. Please provide a valid dataset name.")
 

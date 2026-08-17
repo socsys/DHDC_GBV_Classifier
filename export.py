@@ -1,11 +1,19 @@
 import torch 
 import torch.nn as nn
+import numpy as np 
 from huggingface_hub import PyTorchModelHubMixin
 from onnxruntime.quantization import quantize_dynamic, QuantType
 import onnxruntime.quantization.quant_utils as quant_utils
 import onnxruntime 
+import onnx
 from onnx import shape_inference
 from onnxruntime.quantization.shape_inference import quant_pre_process
+import os 
+from metrics import * 
+import json
+import shutil
+from pathlib import Path
+
 
 # ---------------------------------
 # Prep for use by gbv-d-toxify
@@ -60,7 +68,7 @@ def _evaluate_wrapped_model(model, tokenizer, dataset, device="cuda"):
         icm_score = calculate_icm(gold_labels, predictions)
 
 
-def _save_model_for_extension(model, tokenizer, save_path):
+def _save_model_for_extension(model, tokenizer, save_path, device="cuda"):
     dummy_ids = torch.randint(0, 1000, (1, 256), dtype=torch.long)
     dummy_mask = torch.ones((1, 256), dtype=torch.long)
     torch.onnx.export(model, (dummy_ids.to(device), dummy_mask.to(device)), f"{save_path}/gbv_model.onnx", input_names=["input_ids", "attention_mask"], output_names=["logits"], dynamic_axes={"input_ids": {0: "batch_size", 1: "sequence_length"}, "attention_mask": {0: "batch_size", 1: "sequence_length"}, "logits": {0: "batch_size"}}, opset_version=17, external_data=False, do_constant_folding=False, dynamo=False)
@@ -182,4 +190,68 @@ def export_model(model, tokenizer, save_path, test_dataset=None):
     for opset_import in model.opset_import:
         if opset_import.domain == 'ai.onnx.ml':
             print(f"Updated opset version for ai.onnx.ml: {opset_import.version}")
+
+
+
+def normalize_merges(tokenizer_path: str, output_path: str = None, backup: bool = True):
+    """
+    Normalize the `merges` field in a tokenizer.json file.
+
+    Newer tokenizer.json files store merges as pairs, e.g. ["t", "h"].
+    Older consumers (like some transformers.js BPE implementations)
+    expect merges as space-joined strings, e.g. "t h".
+
+    Converts pair-format merges to string format; leaves string-format
+    merges untouched. Only writes/backs up if a change is actually made.
+    """
+    tokenizer_path = Path(tokenizer_path)
+    output_path = Path(output_path) if output_path else tokenizer_path
+
+    with open(tokenizer_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    model = data.get("model", {})
+    merges = model.get("merges")
+
+    if merges is None:
+        print("No 'merges' field found under data['model']['merges']. Nothing to do.")
+        return
+
+    if not merges:
+        print("'merges' is empty. Nothing to do.")
+        return
+
+    sample = merges[0]
+
+    if isinstance(sample, str):
+        print("Merges are already in string format. No changes needed.")
+        return
+
+    if not isinstance(sample, list):
+        raise TypeError(f"Unrecognized merge entry type: {type(sample)}")
+
+    normalized = []
+    for i, pair in enumerate(merges):
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise ValueError(
+                f"Unexpected merge entry at index {i}: {pair!r} "
+                f"(expected a 2-element list)"
+            )
+        normalized.append(" ".join(pair))
+
+    # Only back up right before we actually overwrite the original file
+    if backup and output_path == tokenizer_path:
+        backup_path = tokenizer_path.with_suffix(tokenizer_path.suffix + ".bak")
+        shutil.copy2(tokenizer_path, backup_path)
+        print(f"Backup written to {backup_path}")
+
+    model["merges"] = normalized
+    data["model"] = model
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    print(f"Converted {len(normalized)} merges from pair format to string format.")
+    print(f"Written to {output_path}")
+
 

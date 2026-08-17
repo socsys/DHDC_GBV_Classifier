@@ -38,7 +38,7 @@ def clean_text(tweet: str) -> str:
     #result = re.sub(r'#', ' ', result)
     return result
 
-def create_data_loader(processed_data, tokenizer, batch_size=16, inf=False):
+def create_data_loader(processed_data, tokenizer, batch_size=16, infr=False):
     ''' Create PyTorch dataloader. Includes labels except in inference mode.'''
     encodings = tokenizer(
         processed_data["text"].tolist(),
@@ -47,7 +47,7 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, inf=False):
         max_length=256,
         return_tensors="pt",
     )
-    if not inf:
+    if not infr:
         binary_labels = torch.tensor(processed_data["binary_labels"].tolist())
         category_labels = torch.tensor(processed_data["category_labels"].tolist())
         data_id = torch.tensor(processed_data["data_id"].tolist())
@@ -65,7 +65,7 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, inf=False):
             encodings["attention_mask"],
             data_id
         )
-    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0) if not inf else torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0) # Do not shuffle at inf to allow for resuming inference from a specific data_id
+    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0) if not infr else torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0) # Do not shuffle at infr to allow for resuming inference from a specific data_id
 
 class CustomDataLoader:
     ''' Custom data loader with function that handles processing raw labeled data files, cleaning text, and converting labels to multi-hot format. '''
