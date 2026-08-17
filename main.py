@@ -56,7 +56,7 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda", inf_data_
     autocast_enabled = device == "cuda"
     batch_size = 32
     save_steps = 1000
-    csv_path = f"{inf_data_path.split('.')[-2]}_inference_predictions_temp.csv"
+    csv_path = f"processed_data/{inf_data_path.split('.')[-2]}_inference_predictions_temp.csv"
 
     print(f"Length of inference data: {len(inf_data)}")
     inf_data.dropna(subset=["text"], inplace=True)
@@ -79,7 +79,7 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda", inf_data_
         for step, batch in tqdm(enumerate(inf_data_loader), total=len(inf_data_loader), desc="Inference"):
             if resume == True and step < resume_step:
                 continue
-            moved = move_batch_to_device(batch, device, inf=True)
+            moved = move_batch_to_device(batch, device, include_labels=False)
             with torch.autocast(device_type=device, enabled=autocast_enabled):
                 outputs = model(
                     input_ids=moved["input_ids"],
@@ -257,7 +257,7 @@ def main(label2id_dict, train_flag=False, train_data_name = None, train_data_pat
         print(f"Length of labelled_texts: {len(labelled_texts)}")
         print(labelled_texts.head())
 
-        labelled_texts.to_csv(f"{args.inf_data_path.split('.')[-2]}_predictions.csv", index=False)
+        labelled_texts.to_csv(f"processed_data/{args.inf_data_path.split('.')[-2]}_predictions.csv", index=False)
     
 
 if __name__ == "__main__":

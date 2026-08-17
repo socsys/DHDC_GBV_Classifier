@@ -4,14 +4,11 @@ from typing import Any, Dict, List
 import torch.distributed as dist
 
 
-def move_batch_to_device(batch, device: str = "cuda", inf=False) -> Dict[str, Any]:
-    if not inf:
-        tensor_keys = ["input_ids", "attention_mask", "binary_labels", "category_labels"]
-    else:
-        tensor_keys = ["input_ids", "attention_mask"]
-    moved = defaultdict()
-    for i, key in enumerate(tensor_keys):
-        moved[key] = batch[i].to(device, non_blocking=True)
+def move_batch_to_device(batch, device: str = "cuda", include_labels: bool=True) -> Dict[str, Any]:
+    tensor_keys = (["input_ids", "attention_mask", "binary_labels", "category_labels"] if include_labels else ["input_ids", "attention_mask"])
+
+    return {key: batch[i].to(device, non_blocking=True) for i, key in enumerate(tensor_keys)}
+
     return moved
 
 def prob_to_label(probs, threshold=0.5):

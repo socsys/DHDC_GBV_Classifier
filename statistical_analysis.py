@@ -136,14 +136,14 @@ def plot_account_status(mp_details, platform="bluesky"):
     plt.title(f"{platform.capitalize()} Account Presence Distribution by Age")
     plt.xlabel("Age")
     plt.ylabel("Number of MPs")
-    plt.savefig(f"{platform}_account_status_distribution_by_age.png")
+    plt.savefig(f"figures/{platform}_account_status_distribution_by_age.png")
 
     plt.figure(figsize=(8, 8))
     sns.histplot(data=mp_details, hue=f"has_{platform}", x="gender", palette={True: "blue", False: "red"}, multiple="stack", alpha=0.4)
     plt.title(f"{platform.capitalize()} Account Presence by Gender")
     plt.xlabel("Gender")
     plt.ylabel("Number of MPs")
-    plt.savefig(f"{platform}_account_status_distribution_by_gender.png")
+    plt.savefig(f"figures/{platform}_account_status_distribution_by_gender.png")
 
 def mp_post_analysis(original_df):
     ''' Function which analyzes posts by MPs, including number of posts, number of MPs with posts, and number of posts by gender and duplicate status. Returns a dataframe with the number of posts by each MP. '''
@@ -197,7 +197,7 @@ def plot_reply_distribution(reply_counts):
     plt.ylabel("Number of MPs")
     plt.axvline(reply_counts["reply_count"].median(), color='red', linestyle='dashed', linewidth=1)
     plt.show()
-    plt.savefig(f"{args.platform}_replies_distribution.png")
+    plt.savefig(f"figures/{args.platform}_replies_distribution.png")
 
 
 def compare_demographics_by_engagement_level(reply_counts):
@@ -276,7 +276,7 @@ def plot_appearance_subtypes_by_gender(original_df):
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
-    plt.savefig(f"{args.platform}_appearance_subtypes_by_gender.png")
+    plt.savefig(f"figures/{args.platform}_appearance_subtypes_by_gender.png")
 
 def appearance_subtypes_by_gender(original_df):
     ''' Function to analyse subtypes of appearance related replies by gender '''
@@ -303,7 +303,7 @@ def plot_reply_by_appearance(active_reply_counts):
     plt.ylabel("Percentage of Appearance Related Replies (%)")
     plt.legend(title="Gender")
     plt.show()
-    plt.savefig(f"{args.platform}_scatter_reply_ratio_by_appearance.png")
+    plt.savefig(f"figures/{args.platform}_scatter_reply_ratio_by_appearance.png")
 
 def load_day_counts(original_df, new=False):
     original_df["day"] = original_df["created_at"].dt.date
@@ -361,7 +361,7 @@ def plot_appearance_by_engagement(day_counts, chart_type, label="percentage_appe
         plt.xticks(labels, rotation=45)
     
     plt.show()
-    plt.savefig(f"{args.platform}_{chart_type}_{label}_by_reply_count.png")
+    plt.savefig(f"figures/{args.platform}_{chart_type}_{label}_by_reply_count.png")
 
 
 def log_reply_bins(day_counts):
@@ -398,7 +398,7 @@ def appearance_by_engagement_analysis(original_df, active_reply_counts, label="p
     plt.xlabel("Reply to Post Ratio")
     plt.ylabel(label.replace('_', ' ').title())
     plt.show()
-    plt.savefig(f"{args.platform}_scatter_{label}_by_reply_to_post_ratio.png")
+    plt.savefig(f"figures/{args.platform}_scatter_{label}_by_reply_to_post_ratio.png")
 
     day_counts = load_day_counts(original_df, new=True) 
 
@@ -492,7 +492,7 @@ def gbv_subcategories_analysis(original_df, gbv_subcategories):
     plt.legend(loc="upper right", bbox_to_anchor=(1.2, 1), title="GBV Subcategory")
     plt.tight_layout()
     plt.show()
-    plt.savefig(f"{args.platform}_stacked_bar_appearance_subcategories_by_ethnicity.png")
+    plt.savefig(f"figures/{args.platform}_stacked_bar_appearance_subcategories_by_ethnicity.png")
 
 
 def appearance_by_race_and_gender(original_df, active_reply_counts, label="pred_binary"):
@@ -523,7 +523,7 @@ def appearance_by_race_and_gender(original_df, active_reply_counts, label="pred_
     plt.ylabel("Percentage of Appearance Related Replies (%)")
     plt.legend(title="Ethnicity and Gender")
     plt.show()
-    plt.savefig(f"{args.platform}_scatter_reply_ratio_to_{percentage_label}_by_ethnicity.png")
+    plt.savefig(f"figures/{args.platform}_scatter_reply_ratio_to_{percentage_label}_by_ethnicity.png")
 
     #print(active_reply_counts.head(10))
 
@@ -546,7 +546,7 @@ def appearance_by_race_and_gender(original_df, active_reply_counts, label="pred_
     plt.xlabel("Ethnicity")
     plt.legend(title="Gender")
     plt.show()
-    plt.savefig(f"{args.platform}_box_{percentage_label}_by_ethnicity_and_gender.png")
+    plt.savefig(f"figures/{args.platform}_box_{percentage_label}_by_ethnicity_and_gender.png")
 
     ## Linear regression of percentage of appearance related replies by ethnicity and gender
     linear_model = smf.ols(formula=f"{percentage_label} ~ C(minority_status) + C(gender) + C(minority_status):C(gender)", data=active_reply_counts).fit()
@@ -613,7 +613,7 @@ def appearance_by_age_and_gender(original_df, active_mp_details, label="percenta
     plt.ylabel(f"Percentage of {label.replace('_', ' ').title()} (%)")
     plt.legend(title="Gender")
     plt.show()
-    plt.savefig(f"{args.platform}_scatter_age_by_{label}.png")
+    plt.savefig(f"figures/{args.platform}_scatter_age_by_{label}.png")
 
     plt.figure(figsize=(10, 6))
     print(f"Minimum age: {active_mp_details['age'].min()}, Maximum age: {active_mp_details['age'].max()}, Number of MPs with age data: {active_mp_details['age'].notna().sum()}")
@@ -629,7 +629,7 @@ def appearance_by_age_and_gender(original_df, active_mp_details, label="percenta
     plt.ylabel(f"Mean {label.replace('_', ' ').title()} (%)")
     #plt.legend(title="Gender")
     plt.show()
-    plt.savefig(f"{args.platform}_bar_age_group_by_{label}.png")
+    plt.savefig(f"figures/{args.platform}_bar_age_group_by_{label}.png")
 
 def one_hot_gbv_category_labels(active_df):
     print("======== ONE HOT ENCODING GBV CATEGORY LABELS ========")
@@ -728,7 +728,7 @@ def analyse_gbv_subcategories(active_df, gbv_subcategories, only=False, comparis
         plt.text(row[f"{b}_Left"] - 0.5, index, f"{abs(row[f'{b}']):.2f}%", va='center', ha='right', color='black')
 
     plt.legend()
-    plt.savefig(f"{args.platform}_population_pyramid_gbv_subcategories_by_{comparison}_{only}.png")
+    plt.savefig(f"figures/{args.platform}_population_pyramid_gbv_subcategories_by_{comparison}_{only}.png")
 
 
 def select_active_mps(mp_details, original_df, reply_counts):
