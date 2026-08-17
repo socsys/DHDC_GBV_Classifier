@@ -1,6 +1,5 @@
 import os # must import before torch to have desired effect 
-os.environ['CUDA_VISIBLE_DEVICES'] ='0'
-
+#os.environ['CUDA_VISIBLE_DEVICES'] ='0'
 from transformers import AutoTokenizer, AutoModel, AutoConfig
 import torch
 import numpy as np
@@ -23,10 +22,9 @@ from tqdm import tqdm
 import onnx
 import ast
 from huggingface_hub import PyTorchModelHubMixin
-from handle_data import * 
-from metrics import *
-from evaluate import _evaluate_model
-from utils import * 
+from handle_data import compute_class_weights, create_data_loader
+from evaluate_model import _evaluate_model
+from utils import move_batch_to_device
 
 torch.cuda.empty_cache()
 
@@ -143,11 +141,6 @@ class GBVMultiTaskClassifier(nn.Module, PyTorchModelHubMixin):
 # Define training loop  
 # ----------------------------------
 
-
-
-
-
-
 class EarlyStopping:
     def __init__(self, patience=200, min_delta=0.001, mode="min", warmup_steps=100):
         self.patience = patience
@@ -258,7 +251,7 @@ def train(model, tokenizer, train_dataset, val_dataset, label2id_dict, best_save
 # ----------------------------------
 
 class Optimizer:
-    def __init__(self, model, tokenizer, dataset, device="cuda", num_category_labels=6):
+    def __init__(self, model, tokenizer, dataset, device="cuda", label2id_dict=None):
         self.device = device
         self.model = model 
         self.tokenizer = tokenizer
@@ -271,8 +264,6 @@ class Optimizer:
         category_class_weights = compute_class_weights(self.df_train.category_labels, num_classes=len(label2id_dict["level_2"]))
         self.binary_weight_tensor = torch.tensor(binary_class_weights, dtype=torch.float32, device=self.device)
         self.category_weight_tensor = torch.tensor(category_class_weights, dtype=torch.float32, device=self.device)
-
-        self.num_category_labels = num_category_labels
 
     def objective(self, trial):
         """Optuna objective: builds a model with sampled hyperparameters, runs a few epochs and returns validation loss to minimize.
@@ -313,7 +304,7 @@ class Optimizer:
                 scaler.update()
 
             # evaluate at epoch end
-            validation = _evaluate_model(model, self.val_loader, self.device)
+            validation = _evaluate_model(self.model, self.val_loader, self.device)
             #val_loss = validation["loss"]
             val_f1 = validation["f1_category"]
             print(val_f1)

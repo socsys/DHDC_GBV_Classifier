@@ -1,8 +1,6 @@
-
-
 from collections import defaultdict
 import math
-import sklearn
+import sklearn.metrics 
 
 class ICMCalculator:
     def __init__(self, num_labels, labels):

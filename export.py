@@ -9,7 +9,7 @@ import onnx
 from onnx import shape_inference
 from onnxruntime.quantization.shape_inference import quant_pre_process
 import os 
-from metrics import * 
+from metrics import calculate_icm
 import json
 import shutil
 from pathlib import Path

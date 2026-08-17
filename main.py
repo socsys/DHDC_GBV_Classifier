@@ -1,21 +1,32 @@
-from metrics import ICMCalculator, get_f1_score, calculate_icm
+from transformers import AutoTokenizer, AutoModel, AutoConfig
 from export import export_model, normalize_merges
-from gbv_multilabel_classifier import *
-from handle_data import * 
-from evaluate import *
+from gbv_multilabel_classifier import GBVMultiTaskClassifier, train, Optimizer
+from utils import move_batch_to_device
+from handle_data import create_data_loader, CustomDataLoader
+from evaluate_model import predict_labels, evaluation
+from sklearn.model_selection import train_test_split
 import os 
 from dotenv import load_dotenv
+from argparse import ArgumentParser
+import torch
+import pandas as pd
+import numpy as np
+import random
+import ast
+from typing import Any, Dict, List
+from tqdm import tqdm
+
 
 load_dotenv()  # Load environment variables from .env file
 
 parser = ArgumentParser()
 parser.add_argument("--train", action="store_true", help="Whether to run training.")
 parser.add_argument("--train_data_name", type=str, default="EXIST", help="Name of the training dataset. Options: EXIST")
-parser.add_argument("--train_data_path", type=str, nargs="?", default=os.getenv("TRAIN_DATA", None), help="Path to the training dataset.") # Remove default for final sharing
+parser.add_argument("--train_data_path", type=str, nargs="?", default=os.getenv("TRAIN_DATA", None), help="Path to the training dataset.") 
 parser.add_argument("--no_val", action="store_true", help="Whether to skip evaluation during training or inference. If set, no validation will be performed.")
-parser.add_argument("--val_data_path", type=str, nargs = "?", help="Path to the validation dataset.", default=os.getenv("VAL_DATA", None)) # Remove default for final sharing 
+parser.add_argument("--val_data_path", type=str, nargs = "?", help="Path to the validation dataset.", default=os.getenv("VAL_DATA", None)) 
 parser.add_argument("--infr", action="store_true", help="Whether to run inference with the trained model.")
-parser.add_argument("--infr_data_path", type=str, nargs="?", help="Path to the dataset for inference.")
+parser.add_argument("--infr_data_path", type=str, nargs="?", help="Path to the dataset for inference.", default=os.getenv("INFR_DATA", None)) 
 parser.add_argument("--resume_infr", action="store_true", help="Whether to resume inference.")
 parser.add_argument("--export", action="store_true", help="Whether to export the trained model to a format suitable for the DToxify Extension")
 parser.add_argument(
@@ -68,7 +79,7 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda", infr_data
     autocast_enabled = device == "cuda"
     batch_size = 32
     save_steps = 1000
-    csv_path = f"{os.getenv("PROCESSED_DATA_DIR")}{infr_data_path.split('/')[-1].split('.')[-2]}_inference_predictions_temp.csv"
+    csv_path = f"{os.getenv('PROCESSED_DATA_DIR')}{infr_data_path.split('/')[-1].split('.')[-2]}_inference_predictions_temp.csv"
 
     print(f"Length of inference data: {len(inf_data)}")
     inf_data.dropna(subset=["text"], inplace=True)
@@ -122,7 +133,6 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda", infr_data
                 local_records: List[Dict[str, Any]] = []
 
     print(f"Length of all_records: {len(all_records)}")
-    #gathered_records = gather_objects(local_records)
 
     return all_records
 
@@ -179,9 +189,12 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
     # print(vars(model))
 
     # Optimizer study
-    #optuna_study = Optimizer(model, tokenizer, train_data, device=device, model_ref=model_ref, num_category_labels=num_category_labels).run_search(n_trials=20)
+    #optuna_study = Optimizer(model, tokenizer, train_data, device=device, model_ref=model_ref, label2id_dict=label2id_dict).run_search(n_trials=20)
     #print(f"Best hyperparameters from Optuna study: {optuna_study.best_params}")
     #exit()
+
+    ## Load validation data for evaluation or export 
+    test_data = CustomDataLoader(data_name = train_data_name, data_path = val_data_path,  split="dev", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
 
 
     if train_flag:
@@ -215,7 +228,6 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         trained_model = model
 
     if not no_val_flag:
-        test_data = CustomDataLoader(data_name = train_data_name, data_path = val_data_path,  split="dev", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
         #print(test_data.head())
         #print(test_data["binary_labels"].value_counts())
         #print(test_data["category_labels"].value_counts())
@@ -268,7 +280,7 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         print(f"Length of labelled_texts: {len(labelled_texts)}")
         print(labelled_texts.head())
 
-        labelled_texts.to_csv(f"{os.getenv("PROCESSED_DATA_DIR")}{infr_data_path.split('.')[-2]}_predictions.csv", index=False)
+        labelled_texts.to_csv(f"{os.getenv('PROCESSED_DATA_DIR')}{infr_data_path.split('/')[-1].split('.')[-2]}_predictions.csv", index=False)
     
 
 if __name__ == "__main__":
