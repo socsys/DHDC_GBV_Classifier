@@ -94,6 +94,9 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda", infr_data
         resume_step = len(all_records) // batch_size
         print(f"Resuming inference from step {resume_step}.")
     else:
+        ## Clear old temporary files
+        if os.path.exists(csv_path):
+            os.remove(csv_path)
         all_records: List[Dict[str, Any]] = []
 
     local_records: List[Dict[str, Any]] = []
@@ -194,7 +197,8 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
     #exit()
 
     ## Load validation data for evaluation or export 
-    test_data = CustomDataLoader(data_name = train_data_name, data_path = val_data_path,  split="dev", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
+    if export_flag or not no_val_flag:
+        test_data = CustomDataLoader(data_name = train_data_name, data_path = val_data_path,  split="dev", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
 
 
     if train_flag:
@@ -203,12 +207,6 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         print(train_data.head())
         #print(train_data["binary_labels"].value_counts())
         #print(train_data["category_labels"].value_counts())    
-
-        #print(f"Length of train dataset before removing ties: {len(train_data)}")
-        train_data = train_data[train_data["binary_labels"] != 99]
-        #print(f"Length of train dataset after removing binary ties: {len(train_data)}")
-        train_data = train_data[train_data["category_labels"] != 99]
-        #print(f"Length of train dataset after removing category ties: {len(train_data)}")
 
         train_data, val_data = train_test_split(train_data, test_size=0.05, stratify=train_data["binary_labels"], random_state=42)
 
@@ -231,8 +229,6 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         #print(test_data.head())
         #print(test_data["binary_labels"].value_counts())
         #print(test_data["category_labels"].value_counts())
-        test_data = test_data[test_data["binary_labels"] != 99]
-        test_data = test_data[test_data["category_labels"] != 99]
         evaluation(trained_model, tokenizer, dataset=test_data, device=device)
 
     if export_flag:
@@ -244,8 +240,10 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         print(f"Length of inference dataset: {len(inf_data)}")
         data_id_col = "comment_id" if "comment_id" in inf_data.columns else "item_id" if "item_id" in inf_data.columns else "data_id" # Update to match inf dataset labeling 
         inf_data.rename(columns={"cleaned_text": "text"}, inplace=True) if "cleaned_text" in inf_data.columns else None 
-        inf_data = inf_data[[data_id_col, "text"]]
-        inf_data.rename(columns={data_id_col: "data_id"}, inplace=True)
+        inf_data.rename(columns={data_id_col: "item_id"}, inplace=True)
+        ## Temporary id suitable for torch dataset
+        inf_data.reset_index(names="data_id", inplace=True)
+        inf_data = inf_data[["item_id", "data_id", "text"]]
         ## For testing
         #inf_data = inf_data.sample(n=1000, random_state=42).reset_index(drop=True) 
         predictions = inference(model, tokenizer, inf_data, resume=resume_infr, infr_data_path=infr_data_path)
@@ -280,6 +278,9 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         print(f"Length of labelled_texts: {len(labelled_texts)}")
         print(labelled_texts.head())
 
+        ## Remove temporary id used for torch dataset
+        labelled_text.drop("data_id")
+        labelled_text.rename(columns={"item_id":"data_id"})
         labelled_texts.to_csv(f"{os.getenv('PROCESSED_DATA_DIR')}{infr_data_path.split('/')[-1].split('.')[-2]}_predictions.csv", index=False)
     
 

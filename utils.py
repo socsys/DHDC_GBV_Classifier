@@ -14,6 +14,9 @@ def prob_to_label(probs, threshold=0.5):
 def is_distributed() -> bool:
     return dist.is_available() and dist.is_initialized()
 
+def get_world_size() -> int:
+    return dist.get_world_size() if is_distributed() else 1
+
 def gather_objects(local_object: Any) -> List[Any]:
     if not is_distributed():
         return [local_object]

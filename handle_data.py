@@ -47,10 +47,11 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, infr=False):
         max_length=256,
         return_tensors="pt",
     )
+    data_id = torch.tensor(processed_data["data_id"].tolist())
+
     if not infr:
         binary_labels = torch.tensor(processed_data["binary_labels"].tolist())
         category_labels = torch.tensor(processed_data["category_labels"].tolist())
-        data_id = torch.tensor(processed_data["data_id"].tolist())
         dataset = torch.utils.data.TensorDataset(
             encodings["input_ids"],
             encodings["attention_mask"],
@@ -59,7 +60,6 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, infr=False):
             data_id
         )
     else:
-        data_id = processed_data["data_id"].tolist() 
         dataset = torch.utils.data.TensorDataset(
             encodings["input_ids"],
             encodings["attention_mask"],
@@ -142,13 +142,20 @@ class CustomDataLoader:
 
         return dataset[["text", "binary_labels", "category_labels"]]
     
-    def load_processed_data(self, clean=False):
+    def load_processed_data(self, clean=False, remove_99=True):
         ''' Function to load and process the raw data, returning a DataFrame with text and multi-hot encoded labels. '''
         raw_data = self._load_raw_data()
         raw_data.rename(columns={"tweet": "text"}, inplace=True) if "tweet" in raw_data.columns else None
         processed_data = self._handle_labels(raw_data)
         if clean:
             processed_data["text"] = processed_data["text"].apply(clean_text)
-        processed_data["data_id"] = processed_data.index.tolist()  # add a unique identifier for each data point, which can be used for tracking during inference
+        process_data.reset_index(names="data_id", inplace=True) # add a unique identifier for each data point, which can be used for tracking during inference
+
+        if remove_99:
+            print(f"Number of binary label ties: {len(processed_data[processed_data["binary_labels"]==99])}")
+            processed_data = processed_data[processed_data["binary_labels"] != 99]
+            print(f"Number of category label ties: {len(processed_data[processed_data["category_labels"]==99])}")
+            processed_data = processed_data[processed_data["category_labels"] != 99]
+
         return processed_data
 

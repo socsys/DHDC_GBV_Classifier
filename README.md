@@ -14,7 +14,7 @@ Should declare environment variables for
 #### Use model for inference 
 Also runs validation automatically.
 
-    python main.py --inf --inf_data_path '/path/to/inf/data' 
+    python main.py --infr --infr_data_path '/path/to/inf/data' 
     [--resume_infr] # if inference was interupted
     [--no_val] # Does not perform evaluation of model before inference 
 
