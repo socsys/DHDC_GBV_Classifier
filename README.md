@@ -8,7 +8,7 @@ Should declare environment variables for
 
     python main.py --train 
     [--train_data_name] '/path/to/train/data' # To override environment variable
-    [--no_val] # Does not perform evaluation of model after training
+    [--no_eval] # Does not perform evaluation of model after training
 
 
 #### Use model for inference 
@@ -16,7 +16,7 @@ Also runs validation automatically.
 
     python main.py --infr --infr_data_path '/path/to/inf/data' 
     [--resume_infr] # if inference was interupted
-    [--no_val] # Does not perform evaluation of model before inference 
+    [--no_eval] # Does not perform evaluation of model before inference 
 
 #### Export model for use in Chrome extension
 Creates folder containing necessary config, tensor files etc, and subfolder containing quantized onnx model. Currently normalizes tensors to match expected format for extension. Can be commented out. 
