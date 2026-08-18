@@ -74,3 +74,4 @@ def calculate_icm(gold_labels, pred_labels, num_category_labels=6):
     minority_class_icm = ICMCalculator(num_category_labels, gold_labels).calculate_icm([[0,0,0,0,1,0] for _ in gold_labels]) # all predictions are the most common GBV category
     predicted_icm = ICMCalculator(num_category_labels, gold_labels).calculate_icm(pred_labels)
     print(f"Gold standard ICM: {gold_standard_icm:.4f}, Majority class ICM: {majority_class_icm:.4f}, Minority class ICM: {minority_class_icm:.4f}, Predicted ICM: {predicted_icm:.4f}")
+    return predicted_icm

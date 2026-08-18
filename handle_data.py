@@ -93,7 +93,7 @@ class CustomDataLoader:
                     raw_data = raw_data[raw_data["split"].isin(["TRAIN_EN", "TRAIN_ES"])]
                 else:
                     raw_data = raw_data[raw_data["split"].isin(["TRAIN_EN"])]
-        elif self.split == "dev":
+        elif self.split == "test":
             if self.data_name == "EXIST": 
                 raw_data = raw_data[raw_data["split"].isin(["DEV_EN"])]
         return raw_data
@@ -149,7 +149,7 @@ class CustomDataLoader:
         processed_data = self._handle_labels(raw_data)
         if clean:
             processed_data["text"] = processed_data["text"].apply(clean_text)
-        process_data.reset_index(names="data_id", inplace=True) # add a unique identifier for each data point, which can be used for tracking during inference
+        processed_data.reset_index(names="data_id", inplace=True) # add a unique identifier for each data point, which can be used for tracking during inference
 
         if remove_99:
             print(f"Number of binary label ties: {len(processed_data[processed_data["binary_labels"]==99])}")

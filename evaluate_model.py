@@ -100,5 +100,5 @@ def evaluation(model, tokenizer, dataset=None, device="cuda"):
     pred_labels = [record["pred_category"] for record in evaluation["records"]]
 
     print("Calculating ICM for EXIST dataset...")
-    calculate_icm(gold_labels, pred_labels)
-    
+    predicted_icm = calculate_icm(gold_labels, pred_labels)
+    return evaluation, f1_score, predicted_icm

@@ -15,15 +15,20 @@ import random
 import ast
 from typing import Any, Dict, List
 from tqdm import tqdm
-
+import logging
 
 load_dotenv()  # Load environment variables from .env file
+
+logging.basicConfig(level=logging.INFO, filename='gbv_model.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+logger.info("===== Starting GBV Multi-Task Classifier script. =====")
 
 parser = ArgumentParser()
 parser.add_argument("--train", action="store_true", help="Whether to run training.")
 parser.add_argument("--train_data_name", type=str, default="EXIST", help="Name of the training dataset. Options: EXIST")
 parser.add_argument("--train_data_path", type=str, nargs="?", default=os.getenv("TRAIN_DATA", None), help="Path to the training dataset.") 
-parser.add_argument("--no_val", action="store_true", help="Whether to skip evaluation during training or inference. If set, no validation will be performed.")
+parser.add_argument("--no_eval", action="store_true", help="Whether to skip evaluation during training or inference. If set, no validation will be performed.")
 parser.add_argument("--val_data_path", type=str, nargs = "?", help="Path to the validation dataset.", default=os.getenv("VAL_DATA", None)) 
 parser.add_argument("--infr", action="store_true", help="Whether to run inference with the trained model.")
 parser.add_argument("--infr_data_path", type=str, nargs="?", help="Path to the dataset for inference.", default=os.getenv("INFR_DATA", None)) 
@@ -153,12 +158,13 @@ def process_category_pred(pred_category_str, id2label_dict):
 # Define main function
 # ----------------------------------
 
-def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", train_flag=False, train_data_name = None, train_data_path=None, no_val_flag=False, val_data_path=None, infr_flag=False, infr_data_path=None, resume_infr=False, export_flag=False, export_output=None, no_backup=False, device="cuda"):
+def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", train_flag=False, train_data_name = None, train_data_path=None, no_eval_flag=False, val_data_path=None, infr_flag=False, infr_data_path=None, resume_infr=False, export_flag=False, export_output=None, no_backup=False, device="cuda"):
     print(f"Using model reference: {model_ref}")
 
     ## Set random seed for reproducibility
     seed = 51
     set_seed(seed)
+    logger.info(f"Random seed set to {seed} for reproducibility.")
 
     num_category_labels = len(label2id_dict["level_2"])
 
@@ -166,18 +172,21 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
     focal_gamma_category = 2 
     lr = 5e-6 
     weight_decay = 0.01 
+    logger.info(f"Training hyperparameters: learning rate={lr}, weight decay={weight_decay}, focal gamma for category={focal_gamma_category}")
 
     model = GBVMultiTaskClassifier(
         model_ref,
         num_category_labels=num_category_labels,
         dropout=0.1,
         lambda_binary=1.0,
-        lambda_category=1.0, # OG 1.0
-        binary_loss_type="focal",#"ce",
+        lambda_category=1.0, 
+        binary_loss_type="focal",
         category_loss_type="focal",
         focal_gamma_binary=1.0,
         focal_gamma_category=focal_gamma_category,
     ).to(device)
+
+    logger.info(f"Model configuration: {model._hub_mixin_config}")
 
     tokenizer = AutoTokenizer.from_pretrained(model_ref)
     if tokenizer.pad_token is None:
@@ -188,6 +197,7 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         os.makedirs("classifier_state_dicts/")
     state_dict_path = f"classifier_state_dicts/{model_ref.split('/')[-1]}_{train_data_name}_final_{seed}.pt"
     save_path = "gbv-model-final"
+    logger.info(f"State dict path: {state_dict_path}, Save path for exported model: {save_path}")
 
     # print(vars(model))
 
@@ -196,12 +206,13 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
     #print(f"Best hyperparameters from Optuna study: {optuna_study.best_params}")
     #exit()
 
-    ## Load validation data for evaluation or export 
-    if export_flag or not no_val_flag:
-        test_data = CustomDataLoader(data_name = train_data_name, data_path = val_data_path,  split="dev", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
+    ## Load validation data for evaluation or export evaluation
+    if export_flag or not no_eval_flag:
+        test_data = CustomDataLoader(data_name=train_data_name, data_path=val_data_path, split="test", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
 
 
     if train_flag:
+        logger.info(f"Training flag is set. Starting training with dataset: {train_data_name} from path: {train_data_path}")
         # Load the train dataset
         train_data = CustomDataLoader(data_name=train_data_name, data_path = train_data_path, label2id_dict=label2id_dict, split="train", multilingual=True).load_processed_data(clean=True) # Model trains best on multilingual data despite being monolingual model. 
         print(train_data.head())
@@ -219,23 +230,32 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         torch.save(trained_model.state_dict(), state_dict_path)
         print(f"Trained model state dict saved at {state_dict_path}")
         trained_model.to(device)
+        logger.info(f"Trained model saved at {state_dict_path}.")
 
     else:
         model.load_state_dict(torch.load(state_dict_path, weights_only=True, map_location=device))
         model.to(device)
         trained_model = model
+        logger.info(f"Loaded model state dict from {state_dict_path}.")
 
-    if not no_val_flag:
+    if not no_eval_flag:
         #print(test_data.head())
         #print(test_data["binary_labels"].value_counts())
         #print(test_data["category_labels"].value_counts())
-        evaluation(trained_model, tokenizer, dataset=test_data, device=device)
+        loss, f1_score, predicted_icm = evaluation(trained_model, tokenizer, dataset=test_data, device=device)
+        logger.info(f"Evaluation completed.")
+        logger.info(f"Loss: {loss['loss']:.4f}, Binary Loss: {loss['loss_binary']:.4f}, Category Loss: {loss['loss_category']:.4f}")
+        logger.info(f"Binary F1 Score: {f1_score['binary']:.4f}, Category F1 Score: {f1_score['category']}, Category Macro F1 Score: {f1_score['category_macro']:.4f}")
+        logger.info(f"Predicted ICM: {predicted_icm:.4f}")
 
     if export_flag:
+        logger.info(f"Export flag is set. Exporting model and tokenizer to {save_path}.")
         export_model(trained_model, tokenizer, save_path=save_path, test_dataset=test_data)
         normalize_merges(f"{save_path}/tokenizer.json", export_output, backup=not no_backup)
+        logger.info(f"Exported model and tokenizer to {save_path}")
 
     if infr_flag:
+        logger.info(f"Inference flag is set. Starting inference with dataset from path: {infr_data_path}")
         inf_data = pd.read_csv(infr_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str})
         print(f"Length of inference dataset: {len(inf_data)}")
         data_id_col = "comment_id" if "comment_id" in inf_data.columns else "item_id" if "item_id" in inf_data.columns else "data_id" # Update to match inf dataset labeling 
@@ -247,6 +267,7 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         ## For testing
         #inf_data = inf_data.sample(n=1000, random_state=42).reset_index(drop=True) 
         predictions = inference(model, tokenizer, inf_data, resume=resume_infr, infr_data_path=infr_data_path)
+        logger.info(f"Inference completed. Predictions generated for {len(predictions)} data points.")
         predictions = pd.DataFrame(predictions, columns=["data_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
         print(f"Length of predictions: {len(predictions)}")
 
@@ -279,9 +300,10 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         print(labelled_texts.head())
 
         ## Remove temporary id used for torch dataset
-        labelled_text.drop("data_id")
-        labelled_text.rename(columns={"item_id":"data_id"})
+        labelled_texts.drop("data_id", axis=1, inplace=True)
+        labelled_texts.rename(columns={"item_id":"data_id"}, inplace=True)
         labelled_texts.to_csv(f"{os.getenv('PROCESSED_DATA_DIR')}{infr_data_path.split('/')[-1].split('.')[-2]}_predictions.csv", index=False)
+        logger.info(f"Inference completed. Predictions saved to {os.getenv('PROCESSED_DATA_DIR')}{infr_data_path.split('/')[-1].split('.')[-2]}_predictions.csv")
     
 
 if __name__ == "__main__":
@@ -290,4 +312,4 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Unsupported train_data_name: {args.train_data_name}. Please provide a valid dataset name.")
 
-    main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", train_flag = args.train, train_data_name=args.train_data_name, train_data_path=args.train_data_path, no_val_flag=args.no_val, val_data_path=args.val_data_path, infr_flag=args.infr, infr_data_path=args.infr_data_path, resume_infr=args.resume_infr, export_flag=args.export, export_output=args.output, no_backup=args.no_backup, device="cuda")
+    main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", train_flag = args.train, train_data_name=args.train_data_name, train_data_path=args.train_data_path, no_eval_flag=args.no_eval, val_data_path=args.val_data_path, infr_flag=args.infr, infr_data_path=args.infr_data_path, resume_infr=args.resume_infr, export_flag=args.export, export_output=args.output, no_backup=args.no_backup, device="cuda")
