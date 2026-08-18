@@ -52,14 +52,14 @@ EXIST training and evaluation data collected by searching Twitter for key terms 
 Data labelled by human annotators. Six annotations per data point. Binary label for GBV applied for majority (4/6) label. Draws (3/6) dropped. Category labels applied if at least two annotators give label. 
 
 #### Quantitative Analyses
-The model performs well at GBV identification. Binary F1 Score: 0.8614
+The model performs well at binary GBV identification. Binary F1 Score: 0.8614
 For subtypes, performance is above 0.63 for all subtypes except MISOGYNY-NON-SEXUAL-VIOLENCE where performance is poor (0.47). 
 Subtype F1 Scores: "-": 0.88; IDEOLOGICAL-INEQUALITY: 0.64, "STEREOTYPING-DOMINANCE": 0.66; "OBJECTIFICATION": 0.69; "SEXUAL-VIOLENCE": 0.67; MISOGYNY-NON-SEXUAL-VIOLENCE: 0.47
 Category Macro F1 Score: 0.6696
 Predicted ICM: 0.4823 (likely comparable to top 10 performance on test set)
 
 #### Ethical Considerations
-Evaluated using hard labels. Hard (majority vote) labels may "suppress" minoritised voices. Annotation performed by expert annotators, 3 male, 3 female. Where gender split in labels, example will be dropped, rather than "priviling" female expertise on GBV. 
+Evaluated using hard labels. Hard (majority vote) labels may "suppress" minoritised voices. Annotation performed by expert annotators, 3 male, 3 female. If there is a perfect gender split in labels, example will be dropped, rather than "privileging" female expertise on GBV through lived experience. 
 
 #### Caveats 
 Given training data, likely model may underperform on posts using up-to-date slang etc, posts shorter than 5 words. 
