@@ -23,3 +23,13 @@ def gather_objects(local_object: Any) -> List[Any]:
     gathered: List[Any] = [None for _ in range(get_world_size())]
     dist.all_gather_object(gathered, local_object)
     return gathered
+
+def tensor_to_number(x):
+    if isinstance(x, torch.Tensor):
+        return x.item()
+    elif isinstance(x, str):
+        x = x.replace("tensor(", "").replace(")", "").strip()
+        try:
+            return int(x)
+        except ValueError:
+            return x

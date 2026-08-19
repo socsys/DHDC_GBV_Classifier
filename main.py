@@ -1,7 +1,7 @@
 from transformers import AutoTokenizer, AutoModel, AutoConfig
 from export import export_model, normalize_merges
 from gbv_multilabel_classifier import GBVMultiTaskClassifier, train, Optimizer
-from utils import move_batch_to_device
+from utils import move_batch_to_device, tensor_to_number
 from handle_data import create_data_loader, CustomDataLoader
 from evaluate_model import predict_labels, evaluation
 from sklearn.model_selection import train_test_split
@@ -42,7 +42,6 @@ parser.add_argument(
     "--no_backup", action="store_true",
     help="Skip creating a .bak backup when overwriting in place"
     )
-args = parser.parse_args()
 
 def set_seed(seed: int = 42):
     ''' Sets the random seed for reproducibility. '''
@@ -74,7 +73,7 @@ def save_model(model, tokenizer, save_path):
 # Define inference function
 # ----------------------------------
 
-def inference(model, tokenizer, inf_data, resume=False, device="cuda", infr_data_path=None):
+def inference(model, tokenizer, inf_data=None, resume=False, device="cuda", infr_data_path=None):
     print("Starting inference...")
     if infr_data_path is None:
         raise ValueError("infr_data_path must be provided for inference.")
@@ -86,9 +85,9 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda", infr_data
     save_steps = 1000
     csv_path = f"{os.getenv('PROCESSED_DATA_DIR')}{infr_data_path.split('/')[-1].split('.')[-2]}_inference_predictions_temp.csv"
 
-    print(f"Length of inference data: {len(inf_data)}")
     inf_data.dropna(subset=["text"], inplace=True)
     inf_data.reset_index(drop=True, inplace=True)
+    print(f"Length of inference dataset after dropping NaNs: {len(inf_data)}")
 
     inf_data_loader = create_data_loader(inf_data, tokenizer, batch_size=batch_size, infr=True)
     print(f"Created inference data loader with {len(inf_data_loader)} batches.")
@@ -124,7 +123,7 @@ def inference(model, tokenizer, inf_data, resume=False, device="cuda", infr_data
                 data_id, category = item
 
                 record = {
-                        "data_id": data_id,
+                        "data_id": tensor_to_number(data_id),
                         "pred_binary": int(binary_pred_mask_bool[index].item()),
                         "pred_binary_prob": binary_probs_list[index],
                         "pred_category": category_pred[index],
@@ -158,7 +157,17 @@ def process_category_pred(pred_category_str, id2label_dict):
 # Define main function
 # ----------------------------------
 
-def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", train_flag=False, train_data_name = None, train_data_path=None, no_eval_flag=False, val_data_path=None, infr_flag=False, infr_data_path=None, resume_infr=False, export_flag=False, export_output=None, no_backup=False, device="cuda"):
+def main():
+    model_ref = "NLP-LTU/bertweet-large-sexism-detector"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    args = parser.parse_args()
+
+    if args.train_data_name == "EXIST":
+        label2id_dict = {"level_1": {"NO":0, "YES":1}, "level_2": {"-":0, "IDEOLOGICAL-INEQUALITY":1, "STEREOTYPING-DOMINANCE":2, "OBJECTIFICATION":3, "SEXUAL-VIOLENCE":4, "MISOGYNY-NON-SEXUAL-VIOLENCE":5}}
+    else:
+        raise ValueError(f"Unsupported train_data_name: {args.train_data_name}. Please provide a valid dataset name.")
+
     print(f"Using model reference: {model_ref}")
 
     ## Set random seed for reproducibility
@@ -195,7 +204,7 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
 
     if not os.path.exists("classifier_state_dicts/"):
         os.makedirs("classifier_state_dicts/")
-    state_dict_path = f"classifier_state_dicts/{model_ref.split('/')[-1]}_{train_data_name}_final_{seed}.pt"
+    state_dict_path = f"classifier_state_dicts/{model_ref.split('/')[-1]}_{args.train_data_name}_final_{seed}.pt"
     save_path = "gbv-model-final"
     logger.info(f"State dict path: {state_dict_path}, Save path for exported model: {save_path}")
 
@@ -207,14 +216,14 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
     #exit()
 
     ## Load validation data for evaluation or export evaluation
-    if export_flag or not no_eval_flag:
-        test_data = CustomDataLoader(data_name=train_data_name, data_path=val_data_path, split="test", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
+    if args.export or not args.no_eval:
+        test_data = CustomDataLoader(data_name=args.train_data_name, data_path=args.val_data_path, split="test", label2id_dict=label2id_dict, multilingual=False).load_processed_data(clean=False)
 
 
-    if train_flag:
-        logger.info(f"Training flag is set. Starting training with dataset: {train_data_name} from path: {train_data_path}")
+    if args.train:
+        logger.info(f"Training flag is set. Starting training with dataset: {args.train_data_name} from path: {args.train_data_path}")
         # Load the train dataset
-        train_data = CustomDataLoader(data_name=train_data_name, data_path = train_data_path, label2id_dict=label2id_dict, split="train", multilingual=True).load_processed_data(clean=True) # Model trains best on multilingual data despite being monolingual model. 
+        train_data = CustomDataLoader(data_name=args.train_data_name, data_path=args.train_data_path, label2id_dict=label2id_dict, split="train", multilingual=True).load_processed_data(clean=True) # Model trains best on multilingual data despite being monolingual model. 
         print(train_data.head())
         #print(train_data["binary_labels"].value_counts())
         #print(train_data["category_labels"].value_counts())    
@@ -224,7 +233,7 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         if not os.path.exists("checkpoints/"):
             os.makedirs("checkpoints/")
 
-        trained_model = train(model, tokenizer, train_data, val_data, label2id_dict, best_save_path=f"checkpoints/{model_ref.split('/')[-1]}_{train_data_name}.pt", lr=lr, weight_decay=weight_decay, device=device)
+        trained_model = train(model, tokenizer, train_data, val_data, label2id_dict, best_save_path=f"checkpoints/{model_ref.split('/')[-1]}_{args.train_data_name}.pt", lr=lr, weight_decay=weight_decay, device=device)
 
         # save state dict for later use
         torch.save(trained_model.state_dict(), state_dict_path)
@@ -238,7 +247,7 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         trained_model = model
         logger.info(f"Loaded model state dict from {state_dict_path}.")
 
-    if not no_eval_flag:
+    if not args.no_eval:
         #print(test_data.head())
         #print(test_data["binary_labels"].value_counts())
         #print(test_data["category_labels"].value_counts())
@@ -248,27 +257,37 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         logger.info(f"Binary F1 Score: {f1_score['binary']:.4f}, Category F1 Score: {f1_score['category']}, Category Macro F1 Score: {f1_score['category_macro']:.4f}")
         logger.info(f"Predicted ICM: {predicted_icm:.4f}")
 
-    if export_flag:
+    if args.export:
         logger.info(f"Export flag is set. Exporting model and tokenizer to {save_path}.")
         export_model(trained_model, tokenizer, save_path=save_path, test_dataset=test_data)
-        normalize_merges(f"{save_path}/tokenizer.json", export_output, backup=not no_backup)
+        normalize_merges(f"{save_path}/tokenizer.json", args.output, backup=not args.no_backup)
         logger.info(f"Exported model and tokenizer to {save_path}")
 
-    if infr_flag:
-        logger.info(f"Inference flag is set. Starting inference with dataset from path: {infr_data_path}")
-        inf_data = pd.read_csv(infr_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str})
+    if args.infr:
+        logger.info(f"Inference flag is set. Starting inference with dataset from path: {args.infr_data_path}")
+        inf_data = pd.read_csv(args.infr_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str})
         print(f"Length of inference dataset: {len(inf_data)}")
+        #inf_data = inf_data.sample(n=1000, random_state=42).reset_index(drop=True) ## Sample for testing 
         data_id_col = "comment_id" if "comment_id" in inf_data.columns else "item_id" if "item_id" in inf_data.columns else "data_id" # Update to match inf dataset labeling 
         inf_data.rename(columns={"cleaned_text": "text"}, inplace=True) if "cleaned_text" in inf_data.columns else None 
         inf_data.rename(columns={data_id_col: "item_id"}, inplace=True)
+
+        try:
+            inf_data["data_id"] = inf_data["item_id"].astype(int) # should be int for TensorDataset
+        except Exception as e:
+            print(f"Error converting item_id to int: {e}. Generating new unique data_id values.")
+            new_ids = np.random.choice(range(1, 10**9), size=len(inf_data), replace=False)
+            inf_data["data_id"] = new_ids
+
         ## Temporary id suitable for torch dataset
-        inf_data.reset_index(names="data_id", inplace=True)
+        #inf_data.reset_index(inplace=True, names=["data_id"])
+        
         inf_data = inf_data[["item_id", "data_id", "text"]]
-        ## For testing
-        #inf_data = inf_data.sample(n=1000, random_state=42).reset_index(drop=True) 
-        predictions = inference(model, tokenizer, inf_data, resume=resume_infr, infr_data_path=infr_data_path)
+
+        predictions = inference(model, tokenizer, inf_data, resume=args.resume_infr, infr_data_path=args.infr_data_path)
         logger.info(f"Inference completed. Predictions generated for {len(predictions)} data points.")
         predictions = pd.DataFrame(predictions, columns=["data_id", "pred_binary", "pred_binary_prob", "pred_category", "pred_category_confidence"])
+        predictions.drop_duplicates(subset=["data_id"], keep="first", inplace=True) # Handle any accidental duplication from resuming inference
         print(f"Length of predictions: {len(predictions)}")
 
         if any(predictions["pred_binary"] == 99):
@@ -276,7 +295,9 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         if any(predictions["pred_category"] == 99):
             raise ValueError("Found predictions with category label 99, which should not occur.")
         if len(predictions) > len(inf_data):
-            raise ValueError("Number of predictions exceeds number of input data points.")
+            raise ValueError(f"Number of predictions exceeds number of input data points. Length predictions = {len(predictions)}, Length input data = {len(inf_data)}")
+
+        print(f"Predictions data_id dtype: {predictions['data_id'].dtype}, Inference data data_id dtype: {inf_data['data_id'].dtype}")
 
         labelled_texts = pd.merge(inf_data, pd.DataFrame(predictions), on="data_id")
         print(labelled_texts.head())
@@ -302,14 +323,9 @@ def main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", trai
         ## Remove temporary id used for torch dataset
         labelled_texts.drop("data_id", axis=1, inplace=True)
         labelled_texts.rename(columns={"item_id":"data_id"}, inplace=True)
-        labelled_texts.to_csv(f"{os.getenv('PROCESSED_DATA_DIR')}{infr_data_path.split('/')[-1].split('.')[-2]}_predictions.csv", index=False)
-        logger.info(f"Inference completed. Predictions saved to {os.getenv('PROCESSED_DATA_DIR')}{infr_data_path.split('/')[-1].split('.')[-2]}_predictions.csv")
-    
+        labelled_texts.to_csv(f"{os.getenv('PROCESSED_DATA_DIR')}{args.infr_data_path.split('/')[-1].split('.')[-2]}_predictions.csv", index=False)
+        logger.info(f"Inference completed. Predictions saved to {os.getenv('PROCESSED_DATA_DIR')}{args.infr_data_path.split('/')[-1].split('.')[-2]}_predictions.csv")
+
 
 if __name__ == "__main__":
-    if args.train_data_name == "EXIST":
-        label2id_dict = {"level_1": {"NO":0, "YES":1}, "level_2": {"-":0, "IDEOLOGICAL-INEQUALITY":1, "STEREOTYPING-DOMINANCE":2, "OBJECTIFICATION":3, "SEXUAL-VIOLENCE":4, "MISOGYNY-NON-SEXUAL-VIOLENCE":5}}
-    else:
-        raise ValueError(f"Unsupported train_data_name: {args.train_data_name}. Please provide a valid dataset name.")
-
-    main(label2id_dict, model_ref="NLP-LTU/bertweet-large-sexism-detector", train_flag = args.train, train_data_name=args.train_data_name, train_data_path=args.train_data_path, no_eval_flag=args.no_eval, val_data_path=args.val_data_path, infr_flag=args.infr, infr_data_path=args.infr_data_path, resume_infr=args.resume_infr, export_flag=args.export, export_output=args.output, no_backup=args.no_backup, device="cuda")
+    main()

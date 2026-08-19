@@ -57,15 +57,15 @@ def create_data_loader(processed_data, tokenizer, batch_size=16, infr=False):
             encodings["attention_mask"],
             binary_labels.to(torch.float),
             category_labels.to(torch.float),
-            data_id
+            data_id.to(torch.long)
         )
     else:
         dataset = torch.utils.data.TensorDataset(
             encodings["input_ids"],
             encodings["attention_mask"],
-            data_id
+            data_id.to(torch.long)
         )
-    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0) if not infr else torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0) # Do not shuffle at infr to allow for resuming inference from a specific data_id
+    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0) if not infr else torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0) # Do not shuffle at infr to allow for resuming inference from a specific point 
 
 class CustomDataLoader:
     ''' Custom data loader with function that handles processing raw labeled data files, cleaning text, and converting labels to multi-hot format. '''
