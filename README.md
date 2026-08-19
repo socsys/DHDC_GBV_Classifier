@@ -13,7 +13,8 @@ Should declare environment variables for
 #### Train and validate model
 
     python main.py --train 
-    [--train_data_name] '/path/to/train/data' # To override environment variable
+    [--train_data_name] # Default to EXIST, currently code only written for EXIST 
+    [--train_data_path] /path/to/train/data # To override environment variable
     [--no_eval] # Does not perform evaluation of model after training
 
 
