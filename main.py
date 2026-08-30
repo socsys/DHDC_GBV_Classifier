@@ -88,6 +88,7 @@ def inference(model, tokenizer, inf_data=None, resume=False, device="cuda", infr
     inf_data.dropna(subset=["text"], inplace=True)
     inf_data.reset_index(drop=True, inplace=True)
     print(f"Length of inference dataset after dropping NaNs: {len(inf_data)}")
+    #print(f"Number of null values in text column: {inf_data['text'].isnull().sum()}")
 
     inf_data_loader = create_data_loader(inf_data, tokenizer, batch_size=batch_size, infr=True)
     print(f"Created inference data loader with {len(inf_data_loader)} batches.")
@@ -265,7 +266,7 @@ def main():
 
     if args.infr:
         logger.info(f"Inference flag is set. Starting inference with dataset from path: {args.infr_data_path}")
-        inf_data = pd.read_csv(args.infr_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str})
+        inf_data = pd.read_csv(args.infr_data_path, dtype={"comment_id": str, "item_id": str, "data_id": str, "cleaned_text": str, "text": str, "pure_text": str})
         print(f"Length of inference dataset: {len(inf_data)}")
         #inf_data = inf_data.sample(n=1000, random_state=42).reset_index(drop=True) ## Sample for testing 
         data_id_col = "comment_id" if "comment_id" in inf_data.columns else "item_id" if "item_id" in inf_data.columns else "data_id" # Update to match inf dataset labeling 
