@@ -4,7 +4,7 @@ Python version = 3.12.3
 
     pip install -r requirements.txt
 
-Should declare environment variables for
+Should declare environment variables (or use .env file) for
 
     export TRAIN_DATA='/path/to/EXIST/training/data'
     export VAL_PATH='/path/to/EXIST/dev/data'
