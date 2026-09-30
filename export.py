@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 # ---------------------------------
-# Prep for use by gbv-d-toxify
+# Prep for external use e.g. huggingface
 # ---------------------------------
 
 class GBVWrapper(nn.Module, PyTorchModelHubMixin):
