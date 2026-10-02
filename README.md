@@ -111,7 +111,7 @@ Prediction of `MISOGYNY-NON-SEXUAL-VIOLENCE` is very poor and label should be di
 
 This repository is released under the MIT License. The upstream [`NLP-LTU/bertweet-large-sexism-detector`](https://huggingface.co/NLP-LTU/bertweet-large-sexism-detector) model does not provide license information. 
 
-The finetuning dataset EXISt stipulates that:
+The finetuning dataset EXIST (Plaza et al., 2025) stipulates that:
 <ul>
 <li> The dataset should only be used for scientific or research purposes. Any other use is explicitly prohibited. </li>
 <li> The datasets must not be redistributed or shared in part or full to any third party. Redirect interested parties to this website. </li>
@@ -125,7 +125,7 @@ MIT licensing of the model artifacts does not grant rights to third-party input 
 The following are citations for the encoder model and finetuning data respectively. 
 
 ```bibtex
-@inproceedings{Al-Azzawi_Kovács_Nilsson_Adewumi_Liwicki_2023, address={Toronto, Canada}, title={NLP-LTU at SemEval-2023 Task 10: The Impact of Data Augmentation and Semi-Supervised Learning Techniques on Text Classification Performance on an Imbalanced Dataset}, url={https://aclanthology.org/2023.semeval-1.196/}, DOI={10.18653/v1/2023.semeval-1.196}, booktitle={Proceedings of the 17th International Workshop on Semantic Evaluation (SemEval-2023)}, publisher={Association for Computational Linguistics}, author={Al-Azzawi, Sana and Kovács, György and Nilsson, Filip and Adewumi, Tosin and Liwicki, Marcus}, editor={Ojha, Atul Kr. and Doğruöz, A. Seza and Da San Martino, Giovanni and Tayyar Madabushi, Harish and Kumar, Ritesh and Sartori, Elisa}, year={2023}, month=july, pages={1421–1427} }
+ @inproceedings{Al-Azzawi_Kovács_Nilsson_Adewumi_Liwicki_2023, address={Toronto, Canada}, title={NLP-LTU at SemEval-2023 Task 10: The Impact of Data Augmentation and Semi-Supervised Learning Techniques on Text Classification Performance on an Imbalanced Dataset}, url={https://aclanthology.org/2023.semeval-1.196/}, DOI={10.18653/v1/2023.semeval-1.196}, booktitle={Proceedings of the 17th International Workshop on Semantic Evaluation (SemEval-2023)}, publisher={Association for Computational Linguistics}, author={Al-Azzawi, Sana and Kovács, György and Nilsson, Filip and Adewumi, Tosin and Liwicki, Marcus}, editor={Ojha, Atul Kr. and Doğruöz, A. Seza and Da San Martino, Giovanni and Tayyar Madabushi, Harish and Kumar, Ritesh and Sartori, Elisa}, year={2023}, month=july, pages={1421–1427} }
 
 
  @article{Plaza_Carrillo-de-Albornoz_Arcos_Rosso_Spina_Amigó_Gonzalo_Morante_2025, address={Madrid, Spain}, title={Overview of EXIST 2025: Learning with Disagreement for Sexism Identification and Characterization in Tweets, Memes, and TikTok Videos (Extended Overview)}, journal={CLEF 2025 Working Notes}, author={Plaza, Laura and Carrillo-de-Albornoz, Jorge and Arcos, Iván and Rosso, Paolo and Spina, Damiano and Amigó, Enrique and Gonzalo, Julio and Morante, Roser}, year={2025}, month=sept, language={en} }
