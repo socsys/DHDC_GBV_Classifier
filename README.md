@@ -22,7 +22,7 @@ The model was developed for the Digital Harms, Democratic Costs (DHDC) browser e
 
 ## Model details
 - **Base model:** [`NLP-LTU/bertweet-large-sexism-detector`](https://huggingface.co/NLP-LTU/bertweet-large-sexism-detector)
-- **Architecture:** Bertweet based sexism classifier as encoder with separate binary and five-class classification heads allowing multiple labels
+- **Architecture:** Bertweet based sexism model as encoder with separate binary and five-class multi-label classification heads. 
 - **Language:** English
 - **Maximum input length:** 514 tokens (inherited from encoder)
 - **Published format:** quantized ONNX, opset 17
@@ -69,13 +69,14 @@ Creates folder containing necessary config, tensor files etc, and subfolder cont
 Model developed by DHDC team at University of Surrey.
 Model intended to detect gender based violence (GBV) and GBV subtype in text-based microblogging platform data (e.g. from Bluesky, X.com).
 Multilabel multilevel classifier has a binary head (GBV) and a multiple category head (GBV subtype).
-Uses [NLP-LTU/bertweet-large-sexism-detector on Huggingface](https://huggingface.co/NLP-LTU/bertweet-large-sexism-detector)) as encoder layer. 
+Uses [NLP-LTU/bertweet-large-sexism-detector on Huggingface](https://huggingface.co/NLP-LTU/bertweet-large-sexism-detector) as encoder layer. 
 Model is trained and validated on EXIST 2025 training data and evaluated on EXIST 2025 development data (test data is withheld for this task). 
 
 #### Intended Use
 The model is intended for use in predicted GBV and GBV subtype for short spans of text. It is a monolingual English model. The intended users are researchers looking to estimate levels of GBV on the platform e.g. for a given set of users. 
 
 #### Factors
+Random seed = 51
 The GBV subtypes from EXIST are: `IDEOLOGICAL-INEQUALITY`, `STEREOTYPING-DOMINANCE`, `OBJECTIFICATION`, `SEXUAL-VIOLENCE`, `MISOGYNY-NON-SEXUAL-VIOLENCE`.
 During training, model only learns GBV subtype classification from true examples of GBV. 
 Both heads used focal loss, with γ = 2 to downweight easy examples.
@@ -84,7 +85,9 @@ Both heads used focal loss, with γ = 2 to downweight easy examples.
 EXIST uses a custom ICM metric to evaluate performance, "punishing" binary GBV/Not GBV errors more than GBV subtype errors. Gold score = 2.15; best performing model = 0.65, 10th best performing model = 0.38. 
 
 #### Training and Evaluation Data
-EXIST training and evaluation data collected by searching Twitter for key terms related to GBV. Tweets collected 2021-2022. Tweets contain 5+ words. Encoder model trained on Gab (right-wing microblogging platform) and Reddit data; classifier trained on Twitter data. 
+Encoder model trained on Gab (right-wing microblogging platform) and Reddit data; classifier trained on EXIST Twitter data. 
+
+EXIST training and evaluation data collected by searching Twitter for key terms related to GBV. Tweets collected 2021-2022. Tweets contain 5+ words. 
 Data labelled by human annotators. Six annotations per data point. Binary label for GBV applied for majority (4/6) label. Draws (3/6) dropped. Category labels applied if at least two annotators give label. 
 
 #### Quantitative Analyses
@@ -100,9 +103,9 @@ Evaluated using hard labels. Hard (majority vote) labels may "suppress" minoriti
 #### Caveats 
 Given training data, likely model may underperform on posts using up-to-date slang etc, posts shorter than 5 words. 
 Trained on multiple microblogging platforms but may underperform on other platforms e.g. Bluesky. 
-Only tested for English language, uses English language model (though uses multilingual finetuning data as improved performance).
-Distinguishing reports of GBV from instances of GBV remains challenging.
-Prediction of MISOGYNY-NON-SEXUAL-VIOLENCE is very poor and label should be discarded. 
+Only tested for English language, uses English language encoder model (though uses multilingual finetuning data as this improved performance).
+Likely fails to distinguish reports of GBV from instances of GBV as this remains challenging.
+Prediction of `MISOGYNY-NON-SEXUAL-VIOLENCE` is very poor and label should be discarded. 
 
 ## License and attribution
 
