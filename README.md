@@ -15,8 +15,8 @@ tags:
 ---
 
 This repository contains the quantized ONNX export of an English language text classifier for detecting gender based violence (GBV) and GBV-subtype. 
-The model predicts a binary label for GBV `pred_binary`: `0` (non-GBV), `1` (GBV).
-The model predicts one or more GBV subtypes `pred_category_labels`:  `IDEOLOGICAL-INEQUALITY`, `STEREOTYPING-DOMINANCE`, `OBJECTIFICATION`, `SEXUAL-VIOLENCE`, `MISOGYNY-NON-SEXUAL-VIOLENCE`.
+<br>The model predicts a binary label for GBV `pred_binary`: `0` (non-GBV), `1` (GBV).
+<br>The model predicts one or more GBV subtypes `pred_category_labels`:  `IDEOLOGICAL-INEQUALITY`, `STEREOTYPING-DOMINANCE`, `OBJECTIFICATION`, `SEXUAL-VIOLENCE`, `MISOGYNY-NON-SEXUAL-VIOLENCE`.
 
 The model was developed for the Digital Harms, Democratic Costs (DHDC) browser extension. It is intended as a research classifier and content-analysis aid, not as a determination about a person or as a substitute for human review.
 
@@ -77,9 +77,9 @@ The model is intended for use in predicted GBV and GBV subtype for short spans o
 
 #### Factors
 Random seed = 51
-The GBV subtypes from EXIST are: `IDEOLOGICAL-INEQUALITY`, `STEREOTYPING-DOMINANCE`, `OBJECTIFICATION`, `SEXUAL-VIOLENCE`, `MISOGYNY-NON-SEXUAL-VIOLENCE`.
-During training, model only learns GBV subtype classification from true examples of GBV. 
-Both heads used focal loss, with γ = 2 to downweight easy examples.
+<br>The GBV subtypes from EXIST are: `IDEOLOGICAL-INEQUALITY`, `STEREOTYPING-DOMINANCE`, `OBJECTIFICATION`, `SEXUAL-VIOLENCE`, `MISOGYNY-NON-SEXUAL-VIOLENCE`.
+<br>During training, model only learns GBV subtype classification from true examples of GBV. 
+<br>Both heads used focal loss, with γ = 2 to downweight easy examples.
 
 #### Metrics
 EXIST uses a custom ICM metric to evaluate performance, "punishing" binary GBV/Not GBV errors more than GBV subtype errors. Gold score = 2.15; best performing model = 0.65, 10th best performing model = 0.38. 
@@ -92,10 +92,10 @@ Data labelled by human annotators. Six annotations per data point. Binary label 
 
 #### Quantitative Analyses
 The model performs well at binary GBV identification. Binary F1 Score: 0.8614
-For subtypes, performance is above 0.63 for all subtypes except `MISOGYNY-NON-SEXUAL-VIOLENCE` where performance is poor (0.47). 
-Subtype F1 Scores: `-` (no GBV): 0.88; `IDEOLOGICAL-INEQUALITY`: 0.64, `STEREOTYPING-DOMINANCE`: 0.66; `OBJECTIFICATION`: 0.69; `SEXUAL-VIOLENCE`: 0.67; `MISOGYNY-NON-SEXUAL-VIOLENCE`: 0.47
-Category Macro F1 Score: 0.6696
-Predicted ICM: 0.4823 (likely comparable to top 10 performance on test set for Plaza et al., 2025)
+<br>For subtypes, performance is above 0.63 for all subtypes except `MISOGYNY-NON-SEXUAL-VIOLENCE` where performance is poor (0.47). 
+<br>Subtype F1 Scores: `-` (no GBV): 0.88; `IDEOLOGICAL-INEQUALITY`: 0.64, `STEREOTYPING-DOMINANCE`: 0.66; `OBJECTIFICATION`: 0.69; `SEXUAL-VIOLENCE`: 0.67; `MISOGYNY-NON-SEXUAL-VIOLENCE`: 0.47
+<br>Category Macro F1 Score: 0.6696
+<br>Predicted ICM: 0.4823 (likely comparable to top 10 performance on test set for Plaza et al., 2025)
 
 #### Ethical Considerations
 Evaluated using hard labels. Hard (majority vote) labels may "suppress" minoritised voices. Annotation performed by expert annotators, 3 male, 3 female. If there is a perfect gender split in labels, example will be dropped, rather than "privileging" female expertise on GBV through lived experience. 
@@ -103,8 +103,8 @@ Evaluated using hard labels. Hard (majority vote) labels may "suppress" minoriti
 #### Caveats 
 Given training data, likely model may underperform on posts using up-to-date slang etc, posts shorter than 5 words. 
 Trained on multiple microblogging platforms but may underperform on other platforms e.g. Bluesky. 
-Only tested for English language, uses English language encoder model (though uses multilingual finetuning data as this improved performance).
-Likely fails to distinguish reports of GBV from instances of GBV as this remains challenging.
+<br>Only tested for English language, uses English language encoder model (though uses multilingual finetuning data as this improved performance).
+<br>Likely fails to distinguish reports of GBV from instances of GBV as this remains challenging.
 Prediction of `MISOGYNY-NON-SEXUAL-VIOLENCE` is very poor and label should be discarded. 
 
 ## License and attribution
